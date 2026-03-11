@@ -1,0 +1,326 @@
+"""
+RCA Agent — Main LangGraph definition.
+
+Graph Flow:
+    START
+      -> query_refiner  [HITL — may interrupt for clarification]
+            -> orchestrator  [classifies and routes]
+                  |-> END                               (greeting — response set directly)
+                  |-> discover_schema
+                        |-> traversal -> response -> END  (simple data lookup)
+                        |-> planner   -> response -> END  (full RCA investigation)
+"""
+from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
+
+from models.state import RCAState
+from agents.query_refiner import query_refiner_node
+from agents.orchestrator import orchestrator_node
+from agents.schema_discovery import discover_schema_node
+from agents.traversal import traversal_node
+from agents.planner import planner_node
+from agents.response import response_node
+
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────
+# Routing functions (conditional edges)
+# ─────────────────────────────────────────────
+
+def _route_after_orchestrator(state: RCAState) -> str:
+    decision = state.get("routing_decision", "rca")
+    if decision == "greeting":
+        return "__end__"
+    return "discover_schema"
+
+
+def _route_after_discovery(state: RCAState) -> str:
+    decision = state.get("routing_decision", "traversal")
+    if decision == "rca":
+        return "planner"
+    return "traversal"
+
+
+# ─────────────────────────────────────────────
+# Graph builder
+# ─────────────────────────────────────────────
+
+def build_rca_graph() -> StateGraph:
+    graph = StateGraph(RCAState)
+
+    # ── Nodes ──
+    graph.add_node("query_refiner",   query_refiner_node)
+    graph.add_node("orchestrator",    orchestrator_node)
+    graph.add_node("discover_schema", discover_schema_node)
+    graph.add_node("traversal",       traversal_node)
+    graph.add_node("planner",         planner_node)
+    graph.add_node("response",        response_node)
+
+    # ── Edges ──
+    graph.add_edge(START, "query_refiner")
+    graph.add_edge("query_refiner", "orchestrator")
+
+    graph.add_conditional_edges(
+        "orchestrator",
+        _route_after_orchestrator,
+        {"__end__": END, "discover_schema": "discover_schema"},
+    )
+
+    graph.add_conditional_edges(
+        "discover_schema",
+        _route_after_discovery,
+        {"planner": "planner", "traversal": "traversal"},
+    )
+
+    graph.add_edge("traversal", "response")
+    graph.add_edge("planner",   "response")
+    graph.add_edge("response",  END)
+
+    compiled = graph.compile(checkpointer=MemorySaver())
+    logger.info("RCA graph compiled successfully (with HITL checkpointer)")
+
+    return compiled
+
+
+# Module-level singleton
+_graph = build_rca_graph()
+
+
+def _print_phase_timings(timings: dict[str, float], total_ms: float) -> None:
+    print("\n" + "-" * 52)
+    print("  Phase Timing Summary")
+    print("-" * 52)
+    for node, ms in timings.items():
+        secs = ms / 1000
+        print(f"  {node:<22} {secs:>7.2f} s")
+    print("-" * 52)
+    print(f"  {'TOTAL':<22} {total_ms / 1000:>7.2f} s")
+    print("-" * 52 + "\n")
+
+
+def _make_initial_state(query: str, max_steps: int) -> RCAState:
+    return {
+        "user_query": query,
+        "refined_query": "",
+        "current_phase": "query_refinement",
+        "routing_decision": "",
+        "routing_context": "",
+        "planning_rationale": "",
+        "planner_steps": [],
+        "planner_step_results": [],
+        "kg_schema": "",
+        "planner_semantic_context": "",
+        "traversal_findings": "",
+        "traversal_tool_calls": [],
+        "traversal_steps_taken": 0,
+        "max_traversal_steps": max_steps,
+        "rca_scenario_guidance": "",
+        "final_response": "",
+        "calculations": "",
+        "data_summary": {},
+        "errors": [],
+        "created_at": datetime.now().isoformat(),
+        "messages": [],
+    }
+
+
+def run_rca(
+    query: str,
+    max_steps: int = 20,
+    thread_id: str = "default",
+) -> dict:
+    """Start a new RCA investigation end-to-end."""
+    thread_config = {"configurable": {"thread_id": thread_id}}
+    initial_state = _make_initial_state(query, max_steps)
+
+    logger.info("Starting RCA [thread=%s]: %s", thread_id, query)
+
+    timings: dict[str, float] = {}
+    t_start = time.perf_counter()
+    t_prev = t_start
+
+    for chunk in _graph.stream(initial_state, config=thread_config, stream_mode="updates"):
+        t_now = time.perf_counter()
+        for node_name in chunk:
+            timings[node_name] = round((t_now - t_prev) * 1000, 1)
+        t_prev = t_now
+
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    _print_phase_timings(timings, total_ms)
+
+    graph_state = _graph.get_state(thread_config)
+    final_state = dict(graph_state.values)
+
+    # Attach interrupt info so the service layer can detect HITL pauses
+    for task in graph_state.tasks:
+        if task.interrupts:
+            final_state["__interrupt__"] = task.interrupts
+            break
+
+    logger.info("RCA complete [thread=%s]", thread_id)
+
+    return final_state
+
+
+def resume_rca(
+    user_clarification: str,
+    thread_id: str,
+) -> dict:
+    """Resume an RCA that was interrupted by the query_refiner node."""
+    from langgraph.types import Command
+
+    thread_config = {"configurable": {"thread_id": thread_id}}
+
+    logger.info(
+        "Resuming RCA [thread=%s] with clarification: %s",
+        thread_id, user_clarification[:80],
+    )
+
+    timings: dict[str, float] = {}
+    t_start = time.perf_counter()
+    t_prev = t_start
+
+    for chunk in _graph.stream(Command(resume=user_clarification), config=thread_config, stream_mode="updates"):
+        t_now = time.perf_counter()
+        for node_name in chunk:
+            timings[node_name] = round((t_now - t_prev) * 1000, 1)
+        t_prev = t_now
+
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    _print_phase_timings(timings, total_ms)
+
+    graph_state = _graph.get_state(thread_config)
+    final_state = dict(graph_state.values)
+
+    for task in graph_state.tasks:
+        if task.interrupts:
+            final_state["__interrupt__"] = task.interrupts
+            break
+
+    logger.info("RCA resumed and complete [thread=%s]", thread_id)
+
+    return final_state
+
+
+# ─────────────────────────────────────────────
+# SSE streaming helpers
+# ─────────────────────────────────────────────
+
+_NODE_TO_EVENT: dict[str, str] = {
+    "query_refiner":   "query_refiner_complete",
+    "orchestrator":    "orchestrator_complete",
+    "discover_schema": "schema_complete",
+    "planner":         "planner_complete",
+    "traversal":       "traversal_complete",
+    "response":        "response_complete",
+}
+
+
+def _emit_node_event(query_id: str, node_name: str, state_delta: dict, mgr) -> None:
+    event_name = _NODE_TO_EVENT.get(node_name)
+    if not event_name:
+        return
+
+    data: dict = {}
+    if node_name == "query_refiner":
+        data = {"refined_query": state_delta.get("refined_query", "")}
+    elif node_name == "orchestrator":
+        data = {"routing_decision": state_delta.get("routing_decision", "")}
+    elif node_name == "planner":
+        data = {"planner_steps": state_delta.get("planner_steps", [])}
+    elif node_name == "traversal":
+        data = {"traversal_steps": state_delta.get("traversal_steps_taken", 0)}
+    elif node_name == "response":
+        data = {"final_response": state_delta.get("final_response", "")}
+
+    mgr.put_sync(query_id, event_name, data)
+
+
+def stream_rca(
+    query: str,
+    query_id: str,
+    thread_id: str,
+    mgr,
+    max_steps: int = 20,
+    on_hitl=None,
+) -> dict:
+    """Stream the RCA graph end-to-end, pushing SSE events via mgr."""
+    thread_config = {"configurable": {"thread_id": thread_id}}
+    initial_state = _make_initial_state(query, max_steps)
+
+    logger.info(
+        "Streaming RCA [thread=%s query=%s]: %.80s",
+        thread_id, query_id, query,
+    )
+
+    # ── Phase 1: initial run ──
+    timings: dict[str, float] = {}
+    t_start = time.perf_counter()
+    t_prev = t_start
+
+    for chunk in _graph.stream(initial_state, config=thread_config, stream_mode="updates"):
+        t_now = time.perf_counter()
+        for node_name, state_delta in chunk.items():
+            timings[node_name] = round((t_now - t_prev) * 1000, 1)
+            _emit_node_event(query_id, node_name, state_delta, mgr)
+        t_prev = t_now
+
+    # ── Check for HITL interrupt ──
+    graph_state = _graph.get_state(thread_config)
+    interrupt_payload = None
+    for task in graph_state.tasks:
+        if task.interrupts:
+            interrupt_payload = task.interrupts[0].value
+            break
+
+    if interrupt_payload:
+        if on_hitl:
+            on_hitl(interrupt_payload)
+        mgr.put_sync(query_id, "hitl_start", interrupt_payload)
+
+        hitl_event = mgr.create_hitl_event(thread_id)
+        logger.info("HITL pause — blocking stream thread [thread=%s]", thread_id)
+        hitl_event.wait()
+        logger.info("HITL unblocked [thread=%s]", thread_id)
+
+        answer = mgr.get_resume_answer(thread_id)
+        mgr.put_sync(query_id, "hitl_complete", {"answer": answer})
+
+        # ── Phase 2: resume ──
+        from langgraph.types import Command
+        t_prev = time.perf_counter()
+        for chunk in _graph.stream(
+            Command(resume=answer),
+            config=thread_config,
+            stream_mode="updates",
+        ):
+            t_now = time.perf_counter()
+            for node_name, state_delta in chunk.items():
+                timings[node_name] = round((t_now - t_prev) * 1000, 1)
+                _emit_node_event(query_id, node_name, state_delta, mgr)
+            t_prev = t_now
+
+    total_ms = round((time.perf_counter() - t_start) * 1000, 1)
+    _print_phase_timings(timings, total_ms)
+
+    final_state = dict(_graph.get_state(thread_config).values)
+    logger.info("Streaming complete [thread=%s query=%s]", thread_id, query_id)
+    return final_state
+
+
+def get_pending_interrupt(thread_id: str) -> dict | None:
+    thread_config = {"configurable": {"thread_id": thread_id}}
+    state = _graph.get_state(thread_config)
+
+    for task in state.tasks:
+        if task.interrupts:
+            return task.interrupts[0].value
+
+    return None
