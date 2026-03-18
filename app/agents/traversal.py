@@ -78,10 +78,10 @@ def _print_tool_result(status: str, output: str):
                     )
             elif "relevant_nodes" in parsed:
                 nodes = parsed["relevant_nodes"]
-                metrics = parsed.get("relevant_metrics", [])
-                display = f"{len(nodes)} nodes, {len(metrics)} metrics found"
+                display = f"{len(nodes)} nodes found"
                 for n in nodes[:5]:
-                    display += f"\n     - {n.get('node_id', '?')} — {(n.get('definition') or '')[:80]}"
+                    ntype = n.get('entity_type', '')
+                    display += f"\n     - {n.get('node_id', '?')} [{ntype}] — {(n.get('definition') or '')[:80]}"
             elif "error" in parsed:
                 display = f"Error: {parsed['error']}"
                 if parsed.get("traceback"):

@@ -66,7 +66,6 @@ class ResumeRequest(BaseModel):
 class BKGQueryRequest(BaseModel):
     mode: str
     node_id: Optional[str] = None
-    metric_id: Optional[str] = None
     question: Optional[str] = None
     start: Optional[str] = None
     depth: Optional[int] = 2
@@ -76,10 +75,10 @@ class BKGQueryRequest(BaseModel):
     model_config = {
         "json_schema_extra": {
             "examples": [
-                {"mode": "get_node",      "node_id": "GeneralContractor"},
+                {"mode": "get_node",      "node_id": "general_contractor"},
                 {"mode": "find_relevant", "question": "H&S compliance"},
-                {"mode": "traverse",      "start": "GeneralContractor", "depth": 2},
-                {"mode": "diagnostic",    "metric_id": "completion_rate"},
+                {"mode": "traverse",      "start": "general_contractor", "depth": 2},
+                {"mode": "get_kpi",       "node_id": "on_air_cycle_time"},
                 {"mode": "schema"},
             ]
         }

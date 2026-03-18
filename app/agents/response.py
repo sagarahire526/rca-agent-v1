@@ -86,7 +86,7 @@ def _compact_output(raw: str, max_len: int = 200) -> str:
             if "error" in parsed:
                 return f"Error: {str(parsed['error'])[:120]}"
             if "relevant_nodes" in parsed:
-                return f"{len(parsed['relevant_nodes'])} nodes, {len(parsed.get('relevant_metrics', []))} metrics"
+                return f"{len(parsed['relevant_nodes'])} nodes"
             if "paths" in parsed:
                 return f"{len(parsed['paths'])} paths"
             if "status" in parsed and parsed["status"] == "success":

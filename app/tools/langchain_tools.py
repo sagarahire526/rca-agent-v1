@@ -37,6 +37,8 @@ def run_cypher(query: str) -> str:
     Use this for custom queries when the higher-level BKG tools don't cover your needs.
     Returns JSON with 'status', 'records', 'count', and 'elapsed_ms'.
     Only READ operations are allowed — no CREATE, MERGE, DELETE, SET, or REMOVE.
+    All nodes use the BKGNode label with node_id property. Relationships use RELATES_TO
+    with relationship_type property.
     """
     result = neo4j_tool.run_cypher_safe(query)
     return json.dumps(result, default=str)
@@ -48,9 +50,11 @@ def run_cypher(query: str) -> str:
 
 @tool
 def get_node(node_id: str) -> str:
-    """Fetch a single node from the Knowledge Graph by its node_id or metric_id.
+    """Fetch a single BKGNode from the Knowledge Graph by its node_id.
     Returns all properties plus incoming and outgoing relationships.
-    Supports aliases like 'GC' for GeneralContractor, 'NAS' for NASSession, etc.
+    Supports aliases like 'GC' for general_contractor, 'NAS' for nas_session, etc.
+    Large properties (map_python_function, map_contract, kpi_python_function, etc.)
+    are excluded — use get_kpi or get_table_schema to fetch those explicitly.
     Use this when you know the exact node you want to inspect.
     """
     result = _get_bkg().query({"mode": "get_node", "node_id": node_id})
@@ -59,9 +63,11 @@ def get_node(node_id: str) -> str:
 
 @tool
 def find_relevant(question: str) -> str:
-    """Keyword search across all ConceptNodes and MetricNodes in the Knowledge Graph.
-    Searches across node_id, name, definition, domain, and attributes fields.
-    Returns up to 8 ConceptNodes and 5 MetricNodes, ranked by relevance score.
+    """Keyword search across all BKGNodes in the Knowledge Graph.
+    Searches across node_id, name, label, definition, nl_description, entity_type,
+    kpi_name, kpi_description, and kpi_formula_description fields.
+    Returns up to 10 nodes ranked by relevance score, with entity_type indicating
+    whether each is a core, context, transaction, reference, or kpi node.
     Use this as your FIRST tool when you don't know which nodes to look at.
     """
     result = _get_bkg().query({"mode": "find_relevant", "question": question})
@@ -70,11 +76,13 @@ def find_relevant(question: str) -> str:
 
 @tool
 def traverse_graph(start: str, depth: int = 2, rel_type: Optional[str] = None) -> str:
-    """Walk the Knowledge Graph starting from a node, following relationships up to
-    a given depth (1-4). Optionally filter by relationship type.
-    Returns discovered paths and node details (definition, primary_table, base_query).
+    """Walk the Knowledge Graph starting from a BKGNode, following RELATES_TO
+    relationships up to a given depth (1-4). Optionally filter by relationship_type
+    property on the edges.
+    Returns discovered paths and node details (label, entity_type, definition,
+    map_table_name, kpi_name).
     Use this to explore the neighborhood of a concept — e.g., to find what tables,
-    metrics, or related entities connect to a starting node.
+    KPIs, or related entities connect to a starting node.
     """
     req: dict = {"mode": "traverse", "start": start, "depth": depth}
     if rel_type:
@@ -84,27 +92,29 @@ def traverse_graph(start: str, depth: int = 2, rel_type: Optional[str] = None) -
 
 
 @tool
-def get_diagnostic(metric_id: str) -> str:
-    """Get detailed information about a MetricNode including its definition,
-    SQL formulas, thresholds, unit, referenced nodes, and diagnostic traversal tree.
-    Use this when you need to understand how a metric is computed or what drives it.
+def get_kpi(node_id: str) -> str:
+    """Get detailed information about a KPI node including its definition,
+    formula description, business logic, Python function, source tables/columns,
+    dimensions, filters, output schema, and related core nodes.
+    Use this when you need to understand how a KPI metric is computed or what drives it.
+    If called on a non-KPI node, returns KPIs that reference that node.
     """
-    result = _get_bkg().query({"mode": "diagnostic", "metric_id": metric_id})
+    result = _get_bkg().query({"mode": "get_kpi", "node_id": node_id})
     return json.dumps(result, default=str)
 
 
 @tool
-def get_table_schema(primary_table: str = "") -> str:
-    """Get PostgreSQL table names and their column names from the Knowledge Graph.
-    If primary_table is provided (e.g. 'stg_ndpd_mbt_tmobile_macro_combined'),
-    returns that table's columns (business-name → actual DB column mapping),
-    primary_key, grain, and base_query for each ConceptNode using that table.
-    If primary_table is empty, returns ALL tables with their column lists.
-    The primary_table values match the ConceptNode.primary_table property in Neo4j.
+def get_table_schema(table_name: str = "") -> str:
+    """Get database table mappings from the Knowledge Graph's map_* properties.
+    If table_name is provided (e.g. 'stg_ndpd_mbt_tmobile_macro_combined'),
+    returns detailed mapping info: map_key_column, map_label_column, map_sql_template,
+    and map_python_function for each BKGNode using that table.
+    If table_name is empty, returns ALL mapped tables with their nodes.
+    The table_name values match the BKGNode.map_table_name property in Neo4j.
     """
     req: dict = {"mode": "schema"}
-    if primary_table:
-        req["table_name"] = primary_table
+    if table_name:
+        req["table_name"] = table_name
     result = _get_bkg().query(req)
     return json.dumps(result, default=str)
 
@@ -151,7 +161,7 @@ def get_all_tools() -> list:
         get_node,
         find_relevant,
         traverse_graph,
-        get_diagnostic,
+        get_kpi,
         get_table_schema,
         run_python,
         run_sql_python,

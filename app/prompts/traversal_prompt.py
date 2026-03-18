@@ -138,7 +138,7 @@ findings matters more than breadth.
 | `find_relevant(question)` | Keyword search — **start here for any new query** |
 | `get_node(node_id)` | Fetch a node with all properties and relationships |
 | `traverse_graph(start, depth, rel_type)` | Walk the graph from a starting node |
-| `get_diagnostic(metric_id)` | Metric formulas, thresholds, diagnostic tree |
+| `get_kpi(node_id)` | KPI definition, formula, business logic, source tables, related nodes |
 | `get_table_schema("")` | List ALL available tables — **call this first, never guess table names** |
 | `get_table_schema(table_name)` | Get columns for a specific table |
 | `run_cypher(query)` | Read-only Cypher query against Neo4j |
