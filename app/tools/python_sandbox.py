@@ -213,6 +213,14 @@ class PythonSandbox:
             escaped = code.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
             code = f'result = pd.read_sql("""{escaped}""", conn).to_dict(orient="records")'
 
+        def _execute_query(sql: str) -> list[dict]:
+            """Run a read-only SQL query and return rows as list[dict]."""
+            import re
+            # Collapse multiple blank lines → single newline to prevent
+            # SQL parser truncation between CTE and SELECT blocks.
+            sql = re.sub(r'\n\s*\n', '\n', sql.strip())
+            return pd.read_sql(sql, self.conn).to_dict(orient="records")
+
         namespace = {
             "conn": self.conn,
             "pd": pd,
@@ -220,6 +228,7 @@ class PythonSandbox:
             "go": go,
             "px": px,
             "json": json,
+            "execute_query": _execute_query,
             "session": self.session_vars,
             "result": None,
         }

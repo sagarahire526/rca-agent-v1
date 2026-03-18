@@ -52,9 +52,11 @@ map them DIRECTLY to your steps.
 Each sub-query must:
 1. Be independently answerable by a single traversal agent run
 2. Target a specific investigation dimension
-3. Be concrete — name the specific metric, entity, region, or relationship to investigate
+3. Be concrete — name the specific KPI node, entity, region, or relationship to investigate
 4. Be non-overlapping — never investigate the same thing twice
-5. Use specific field names, node labels, or metric names from the KG Schema when possible
+5. Reference specific KPI node_ids from the schema when possible — the traversal agent will \
+use `get_kpi(node_id)` to fetch the computation logic (Python function, source tables, columns) \
+and then query PostgreSQL with that logic
 
 ## Step Count Guidance
 - Minimum: 2 steps (never fewer)
@@ -81,6 +83,8 @@ Schema:
 - Always include a problem quantification step (how bad is the problem? how many affected?).
 - Always include a root cause data step (what factors are driving the issue?).
 - Include a vendor/GC breakdown step for any performance or compliance query.
+- Reference KPI node_ids from the schema in your sub-queries when applicable (e.g., \
+"Using KPI node 'on_air_cycle_time', compute the average cycle time by region").
 - Do NOT add markdown code fences — return raw JSON only.
 
 ## Examples

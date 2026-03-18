@@ -54,7 +54,7 @@ def get_node(node_id: str) -> str:
     Returns all properties plus incoming and outgoing relationships.
     Supports aliases like 'GC' for general_contractor, 'NAS' for nas_session, etc.
     Large properties (map_python_function, map_contract, kpi_python_function, etc.)
-    are excluded — use get_kpi or get_table_schema to fetch those explicitly.
+    are excluded — use get_kpi to fetch KPI details explicitly.
     Use this when you know the exact node you want to inspect.
     """
     result = _get_bkg().query({"mode": "get_node", "node_id": node_id})
@@ -103,22 +103,6 @@ def get_kpi(node_id: str) -> str:
     return json.dumps(result, default=str)
 
 
-@tool
-def get_table_schema(table_name: str = "") -> str:
-    """Get database table mappings from the Knowledge Graph's map_* properties.
-    If table_name is provided (e.g. 'stg_ndpd_mbt_tmobile_macro_combined'),
-    returns detailed mapping info: map_key_column, map_label_column, map_sql_template,
-    and map_python_function for each BKGNode using that table.
-    If table_name is empty, returns ALL mapped tables with their nodes.
-    The table_name values match the BKGNode.map_table_name property in Neo4j.
-    """
-    req: dict = {"mode": "schema"}
-    if table_name:
-        req["table_name"] = table_name
-    result = _get_bkg().query(req)
-    return json.dumps(result, default=str)
-
-
 # ─────────────────────────────────────────────
 # Python Sandbox Tools
 # ─────────────────────────────────────────────
@@ -162,7 +146,6 @@ def get_all_tools() -> list:
         find_relevant,
         traverse_graph,
         get_kpi,
-        get_table_schema,
         run_python,
         run_sql_python,
     ]
