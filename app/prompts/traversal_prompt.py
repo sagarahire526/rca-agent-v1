@@ -157,6 +157,12 @@ findings matters more than breadth.
   - Root cause indicators found in the data
   - Any data gaps or limitations encountered
   - Calculated values with the formula used
+- **EMPTY RESULT HANDLING (CRITICAL)**: If `run_sql_python` returns `empty_result_warning` in its output, \
+  your WHERE clause filters are too restrictive. Immediately re-examine the query and remove \
+  unnecessary filters — especially `IS NOT NULL`, `IS NULL`, and overly specific value conditions \
+  on columns that may be sparsely populated. Rewrite the query keeping only the filters ESSENTIAL according to user query\
+  to the user's question **(e.g. market/region/GC filters)** and retry. This is a common issue with \
+  milestone and status columns that are mostly NULL in the data.
 - **Never fabricate data.** If something is not in the graph or database, say so explicitly.
 - **NEVER re-execute a tool call that already succeeded.**
 - **Set `result = <value>`** at the end of every `run_python` / `run_sql_python` call.
