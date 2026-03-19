@@ -36,115 +36,41 @@ OKLAHOMA CITY
 | # | Task | Notes |
 |---|------|-------|
 | 1 | **Data Synthesis** | Combine all traversal findings into a coherent root cause picture |
-| 2 | **Calculations** | Use Python sandbox for ALL arithmetic — never estimate in your head |
 | 3 | **Root Cause Identification** | Identify the PRIMARY root causes backed by data evidence |
 | 4 | **Impact Assessment** | Quantify the impact of each root cause on delivery/compliance/quality |
 | 5 | **Recommendations** | Provide specific, actionable corrective actions with priority |
 
 ## Output Format — RCA Report
-Use the sections below. Include ALL sections that are relevant to the query.
+Structure the report to fit the data you actually received. Do NOT force data into \
+predefined table schemas — let the data shape the tables. Use whatever sections, columns, \
+and breakdowns are appropriate for the specific query and findings.
 
----
+### General Structure
+1. **Title** — concise, matching the investigation topic
+2. **Executive Summary** — 2-3 sentences: problem magnitude, key finding, critical action needed
+3. **Data Findings** — present all retrieved data in well-structured Markdown tables. \
+   Design table columns to match the actual data dimensions (e.g., region, vendor, milestone, \
+   metric type — whatever the traversal returned). Include counts, percentages, and rates \
+   where the data supports them.
+4. **Root Cause Analysis** — identify primary root causes backed by data evidence from the \
+   findings above. State the evidence clearly.
+5. **Feasibility & Confidence Assessment** — for each key finding or root cause, state the \
+   confidence level (HIGH / MEDIUM / LOW) based ONLY on data completeness and quality. \
+   Explain what data supports the conclusion and what data gaps exist. Do NOT make assumptions \
+   — if the data is insufficient to draw a conclusion, say so. Example: \
+   "HIGH confidence: based on 1,247 site records across all 4 regions with complete milestone dates." \
+   "LOW confidence: only 38 records had crew utilization data; finding may not generalize."
+6. **Recommendations** — specific, actionable corrective actions with priority where possible
+7. **Summary** — brief closing paragraph suitable for stakeholder forwarding
 
-### RCA Report: [Concise Title Matching the Investigation]
-
-**Query**: [One-sentence restatement of the exact question investigated]
-**Analysis Period**: [Timeframe analyzed]
-
----
-
-#### Executive Summary
-2-3 sentences: the problem magnitude, top root cause, and the single most critical action needed.
-
----
-
-#### Problem Statement & Magnitude
-Present the scale of the problem with specific numbers in a table:
-
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Total affected sites/cases | X | [context] |
-| Worst region | [name] | X cases (Y% of total) |
-| Worst vendor | [name] | X cases (Y% of total) |
-| Period analyzed | [dates] | |
-
----
-
-#### Data Evidence
-Present the actual data retrieved, organized in tables. This is the core of the data-backed RCA.
-
-**By Region:**
-| Region | Count | % of Total | Trend | Status |
-|--------|-------|------------|-------|--------|
-| NORTHEAST | X | Y% | ↑/↓/→ | [assessment] |
-| ... | | | | |
-
-**By Vendor/GC:**
-| Vendor | Count | % of Total | Performance Score | Action Required |
-|--------|-------|------------|-------------------|-----------------|
-| Vendor A | X | Y% | Z% | [specific action] |
-| ... | | | | |
-
-**By Metric/Category (if applicable):**
-| Category | Passed | Failed | Failure Rate | Root Cause |
-|----------|--------|--------|-------------|------------|
-| PPE | X | Y | Z% | [cause] |
-| ... | | | | |
-
----
-
-#### Root Causes Identified
-List root causes in order of impact, backed by data:
-
-| # | Root Cause | Evidence | Sites Impacted | Severity |
-|---|-----------|----------|----------------|----------|
-| 1 | [specific root cause] | [data evidence] | X sites (Y%) | HIGH/MEDIUM/LOW |
-| 2 | ... | | | |
-
----
-
-#### Impact Assessment
-Quantify the downstream impact:
-
-| Impact Area | Current State | Target | Gap | Risk Level |
-|------------|---------------|--------|-----|------------|
-| [e.g., SLA compliance] | X% | Y% | Z% gap | HIGH |
-| [e.g., Schedule impact] | X days delay | On-time | X days | MEDIUM |
-
----
-
-#### Recommendations & Action Plan
-Provide specific, prioritized corrective actions:
-
-| Priority | Action | Owner Area | Target | Expected Impact |
-|----------|--------|------------|--------|-----------------|
-| P1 (Immediate) | [specific action with numbers] | [team/vendor] | [date/metric] | [quantified improvement] |
-| P2 (This Week) | ... | | | |
-| P3 (This Month) | ... | | | |
-
----
-
-#### Top Offenders *(include for compliance/quality/performance queries)*
-| Rank | Entity | Violation Count | Repeat Offender? | Recommended Action |
-|------|--------|----------------|-------------------|-------------------|
-| 1 | [vendor/region] | X | Yes/No | [specific action] |
-| ... | | | | |
-
----
-
-#### Relevant KPIs
-| KPI | Current Value | Target | Status | Trend |
-|-----|--------------|--------|--------|-------|
-| [e.g., HSE Compliance Rate] | X% | Y% | ✗ Below | ↓ Declining |
-| [e.g., FTR Rate] | X% | Y% | ✓ On Track | → Stable |
-
----
-
-#### Closing Summary
-One paragraph: the investigation conclusion, top 2-3 root causes with data backing, and the \
-recommended immediate actions. This is the paragraph the PM forwards to stakeholders.
-
----
+### Section Guidelines
+- Only include sections for which you have actual data. If a dimension was not investigated, \
+  skip it — do NOT add placeholder sections.
+- Use Markdown tables for all numeric/structured data. Design column headers to match the \
+  actual data fields returned — do not use generic templates.
+- If data is missing or incomplete for a section, note it briefly: \
+  *"[Topic]: Data not available from traversal findings."*
+- Do not use emojis anywhere in the report.
 
 ## Calculation Rules
 - **Use Python sandbox** for ALL arithmetic — write a ```python block and it will be executed.
@@ -156,11 +82,13 @@ up to **3 times** before giving up.
 - **Be precise**: use actual numbers from the traversal data — do not approximate without stating so.
 
 ## Output Rules
-- Respond in valid Markdown only.
+- Respond in valid Markdown only. No emojis.
 - Use tables for ALL numeric data — never use bullet lists for numbers that belong in a table.
-- Every recommendation must include a specific number or target.
+- Every recommendation must include a specific number or target where possible.
 - Avoid telecom jargon in the executive summary — plain PM language only.
-- If data for a section is missing, write: *"[Section name]: Data not retrieved — [what was missing]"*
 - Never fabricate data. Ground every conclusion in the actual data retrieved.
-- State any assumptions explicitly: > **Assumption**: [text]
+- Do NOT make assumptions. If data is insufficient, state the gap explicitly rather than \
+  filling in with guesses.
+- The Feasibility & Confidence section must be purely data-driven — cite record counts, \
+  coverage, and completeness to justify each confidence level.
 """
