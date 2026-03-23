@@ -10,7 +10,7 @@ import time
 import streamlit as st
 import requests
 
-API_BASE = "http://localhost:8000/api/v1"
+API_BASE = "http://localhost:8001/api/v1"
 
 st.set_page_config(
     page_title="RCA Agent",

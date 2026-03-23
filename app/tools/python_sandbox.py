@@ -36,9 +36,30 @@ SAFE_MODULES = {
 
 # Blocked built-in functions
 BLOCKED_BUILTINS = {
-    "exec", "eval", "compile", "__import__", "open",
+    "exec", "eval", "compile", "open",
     "breakpoint", "exit", "quit",
 }
+
+# Modules allowed at runtime via import statements
+ALLOWED_IMPORT_MODULES = {
+    *SAFE_MODULES.keys(),
+    "collections", "datetime", "itertools", "functools",
+}
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """
+    Restricted __import__ that only allows whitelisted modules.
+    This replaces the real __import__ in the sandbox so that
+    `import json`, `from datetime import date`, etc. work at runtime
+    while blocking arbitrary module imports.
+    """
+    top_level = name.split(".")[0]
+    if top_level not in ALLOWED_IMPORT_MODULES:
+        raise ImportError(f"Import of '{name}' is not allowed in sandbox.")
+    return __builtins__["__import__"](name, globals, locals, fromlist, level) \
+        if isinstance(__builtins__, dict) \
+        else __builtins__.__dict__["__import__"](name, globals, locals, fromlist, level)
 
 
 def _validate_code(code: str) -> tuple[bool, str]:
@@ -60,7 +81,7 @@ def _validate_code(code: str) -> tuple[bool, str]:
             elif isinstance(node, ast.Import):
                 module = node.names[0].name.split(".")[0]
 
-            if module not in SAFE_MODULES and module not in ("collections", "datetime", "itertools", "functools"):
+            if module not in ALLOWED_IMPORT_MODULES:
                 return False, f"Import of '{module}' is not allowed in sandbox."
 
         # Block attribute access to dunder methods (except __init__, __str__, __repr__)
@@ -91,14 +112,13 @@ def execute_python(code: str, context: dict[str, Any] | None = None) -> dict:
             "result": None,
         }
 
-    # Build restricted globals
+    # Build restricted globals — keep __import__ but swap it for the safe version
+    builtins_dict = __builtins__.__dict__ if hasattr(__builtins__, "__dict__") else __builtins__
     safe_builtins = {
-        k: v for k, v in __builtins__.__dict__.items()
-        if k not in BLOCKED_BUILTINS
-    } if hasattr(__builtins__, "__dict__") else {
-        k: v for k, v in __builtins__.items()
+        k: v for k, v in builtins_dict.items()
         if k not in BLOCKED_BUILTINS
     }
+    safe_builtins["__import__"] = _safe_import
 
     namespace = {
         "__builtins__": safe_builtins,
@@ -213,13 +233,12 @@ class PythonSandbox:
             escaped = code.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
             code = f'result = pd.read_sql("""{escaped}""", conn).to_dict(orient="records")'
 
-        def _execute_query(sql: str) -> list[dict]:
-            """Run a read-only SQL query and return rows as list[dict]."""
-            import re
-            # Collapse multiple blank lines → single newline to prevent
-            # SQL parser truncation between CTE and SELECT blocks.
-            sql = re.sub(r'\n\s*\n', '\n', sql.strip())
-            return pd.read_sql(sql, self.conn).to_dict(orient="records")
+        def _execute_query(sql, params=None, db=None, max_rows=None):
+            """Helper: run SQL and return list[dict] (not a DataFrame)."""
+            df = pd.read_sql(sql, self.conn, params=params)
+            if max_rows is not None:
+                df = df.head(max_rows)
+            return df.to_dict(orient="records")
 
         namespace = {
             "conn": self.conn,
@@ -284,8 +303,7 @@ class PythonSandbox:
         except Exception as e:
             return {
                 "status": "error",
-                "error": str(e),
-                "traceback": traceback.format_exc(),
+                "error": str(e)
             }
 
     def close(self):

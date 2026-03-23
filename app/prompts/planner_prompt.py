@@ -35,7 +35,7 @@ Common RCA investigation areas:
 - **Construction-to-On-Air Backlog**: Integration backlog, CMG delays, transmission issues
 - **Process Compliance**: Check-in/check-out, ICOP readiness, RIOT completion, CR validity
 
-**Regions** (4): NORTHEAST, WEST, SOUTH, CENTRAL
+**Regions** (4): WEST, SOUTH, CENTRAL
 **Markets** (53): NEW ORLEANS, MEMPHIS, SPOKANE, DENVER, NASHVILLE, SALT LAKE CITY, TAMPA, \
 DETROIT, HOUSTON, COLUMBUS, LOUISVILLE, ORLANDO, MILWAUKEE, SAN FRANCISCO, MONTANA, AUSTIN, \
 PHILADELPHIA, LAS VEGAS, JACKSONVILLE, MOBILE, DALLAS, SACRAMENTO, RALEIGH, ATLANTA, SAN ANTONIO, \

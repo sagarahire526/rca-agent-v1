@@ -30,7 +30,7 @@ compliance issues, root cause identification, and corrective action recommendati
 Use this when the query is:
 - A **single-dimension** fact or status lookup — not a root cause investigation
 - Examples:
-  - "How many H&S non-compliance sites are there in NORTHEAST?"
+  - "How many H&S non-compliance sites are there in SOUTH?"
   - "What is the current FTR rate for vendor X?"
   - "List all sites with pending NTP in Dallas"
   - "What is the Civil SLA threshold?"
@@ -72,9 +72,9 @@ Schema:
 ## Examples
 
 Query: "Hello, what can you help me with?"
-→ {"routing_decision": "greeting", "reasoning": "General greeting and system capability inquiry", "direct_response": "Hello! I am an RCA (Root Cause Analysis) Agent for telecom site rollout operations. I can help you investigate: delays and SLA breaches (Civil, RAN, Integration), vendor and GC performance issues, H&S and quality non-compliance root causes, construction-to-on-air backlog analysis, material and prerequisite bottlenecks, FTR failures and rework patterns. Try asking: 'Which vendors have the highest Civil SLA breaches in the last 90 days?' or 'What is causing H&S non-compliance in the NORTHEAST region?'"}
+→ {"routing_decision": "greeting", "reasoning": "General greeting and system capability inquiry", "direct_response": "Hello! I am an RCA (Root Cause Analysis) Agent for telecom site rollout operations. I can help you investigate: delays and SLA breaches (Civil, RAN, Integration), vendor and GC performance issues, H&S and quality non-compliance root causes, construction-to-on-air backlog analysis, material and prerequisite bottlenecks, FTR failures and rework patterns. Try asking: 'Which vendors have the highest Civil SLA breaches in the last 90 days?' or 'What is causing H&S non-compliance in the SOUTH region?'"}
 
-Query: "What is the current FTR rate for NORTHEAST?"
+Query: "What is the current FTR rate for SOUTH?"
 → {"routing_decision": "traversal", "reasoning": "Single metric lookup — FTR rate for a specific region", "direct_response": null}
 
 Query: "Which regions have the highest H&S non-compliance and what are the root causes?"

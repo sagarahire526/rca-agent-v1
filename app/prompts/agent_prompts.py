@@ -3,7 +3,7 @@ Backwards-compatible re-export of all agent prompts.
 
 Individual prompt modules:
     prompts.traversal_prompt  — TRAVERSAL_SYSTEM
-    prompts.response_prompt   — RESPONSE_SYSTEM
+    prompts.response_prompt   — RESPONSE_SYSTEM (Analysis Agent)
 
 Import directly from those modules for new code.
 This file exists so that any legacy `from prompts.agent_prompts import ...`

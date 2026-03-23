@@ -157,6 +157,18 @@ def upsert_thread(thread_id: str, user_id: str, thread_name: str | None = None) 
     )
 
 
+def auto_name_thread(thread_id: str, query: str) -> None:
+    """Set thread_name to the first user query (truncated) if it's currently NULL."""
+    name = query.strip()[:250]
+    if not name:
+        return
+    _exec(
+        f"UPDATE {_SCHEMA}.rca_agent_threads SET thread_name = %s "
+        f"WHERE thread_id = %s AND thread_name IS NULL",
+        (name, thread_id),
+    )
+
+
 def touch_thread(thread_id: str) -> None:
     """Refresh last_active_at on resume (user_id already stored from initial call)."""
     _exec(

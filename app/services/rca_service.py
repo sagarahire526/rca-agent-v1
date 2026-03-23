@@ -59,6 +59,7 @@ def run_query(
 
     db_svc.upsert_thread(thread_id, user_id)
     db_svc.create_query(query_id, thread_id, user_id, query)
+    db_svc.auto_name_thread(thread_id, query)
 
     logger.info("Starting RCA query [thread=%s query=%s]: %.80s", thread_id, query_id, query)
 

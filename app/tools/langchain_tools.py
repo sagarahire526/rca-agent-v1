@@ -16,6 +16,84 @@ from tools.bkg_tool import BKGTool
 from tools.python_sandbox import execute_python, PythonSandbox
 
 
+# ─────────────────────────────────────────────
+# Per-tool character limits (context overflow defense)
+# ─────────────────────────────────────────────
+
+_TOOL_CHAR_LIMITS = {
+    "get_kpi":        50000,
+    "get_node":       50000,
+    "find_relevant":  6000,
+    "traverse_graph": 6000,
+    "run_sql_python": 10000,
+    "run_python":     10000,
+    "run_cypher":     6000,
+}
+
+
+def _truncate_tool_output(tool_name: str, raw_json: str) -> str:
+    """
+    Truncate a tool's JSON output to fit within the tool's char budget.
+    Preserves structure: for list results, keeps first N rows + total count.
+    For errors, always returns full output (errors are small and needed for retry).
+    """
+    limit = _TOOL_CHAR_LIMITS.get(tool_name, 3000)
+
+    if len(raw_json) <= limit:
+        return raw_json
+
+    try:
+        parsed = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError):
+        return raw_json[:limit] + '\n... (truncated by tool trimmer)'
+
+    if isinstance(parsed, dict):
+        if parsed.get("status") == "error" or "error" in parsed:
+            return raw_json
+
+        # run_sql_python / run_python: truncate the 'result' list
+        if "result" in parsed and isinstance(parsed["result"], list):
+            rows = parsed["result"]
+            total = len(rows)
+            keep = total
+            while keep > 0:
+                parsed["result"] = rows[:keep]
+                parsed["_truncated"] = {
+                    "total_rows": total,
+                    "rows_shown": keep,
+                    "message": f"Showing {keep} of {total} rows. Use aggregations/GROUP BY to reduce."
+                }
+                candidate = json.dumps(parsed, default=str)
+                if len(candidate) <= limit:
+                    return candidate
+                keep = keep // 2
+            parsed["result"] = []
+            parsed["_truncated"] = {"total_rows": total, "rows_shown": 0}
+            return json.dumps(parsed, default=str)[:limit]
+
+        # run_cypher: truncate 'records' list
+        if "records" in parsed and isinstance(parsed["records"], list):
+            rows = parsed["records"]
+            total = len(rows)
+            keep = total
+            while keep > 0:
+                parsed["records"] = rows[:keep]
+                parsed["count"] = total
+                parsed["_truncated"] = f"Showing {keep} of {total} records"
+                candidate = json.dumps(parsed, default=str)
+                if len(candidate) <= limit:
+                    return candidate
+                keep = keep // 2
+
+        # get_kpi / get_node / find_relevant: truncate large string fields
+        compact = json.dumps(parsed, default=str)
+        if len(compact) <= limit:
+            return compact
+        return compact[:limit] + '\n... (truncated by tool trimmer)'
+
+    return raw_json[:limit] + '\n... (truncated by tool trimmer)'
+
+
 # Lazy singleton for BKGTool
 _bkg: BKGTool | None = None
 
@@ -41,7 +119,7 @@ def run_cypher(query: str) -> str:
     with relationship_type property.
     """
     result = neo4j_tool.run_cypher_safe(query)
-    return json.dumps(result, default=str)
+    return _truncate_tool_output("run_cypher", json.dumps(result, default=str))
 
 
 # ─────────────────────────────────────────────
@@ -58,7 +136,7 @@ def get_node(node_id: str) -> str:
     Use this when you know the exact node you want to inspect.
     """
     result = _get_bkg().query({"mode": "get_node", "node_id": node_id})
-    return json.dumps(result, default=str)
+    return _truncate_tool_output("get_node", json.dumps(result, default=str))
 
 
 @tool
@@ -71,7 +149,7 @@ def find_relevant(question: str) -> str:
     Use this as your FIRST tool when you don't know which nodes to look at.
     """
     result = _get_bkg().query({"mode": "find_relevant", "question": question})
-    return json.dumps(result, default=str)
+    return _truncate_tool_output("find_relevant", json.dumps(result, default=str))
 
 
 @tool
@@ -88,7 +166,7 @@ def traverse_graph(start: str, depth: int = 2, rel_type: Optional[str] = None) -
     if rel_type:
         req["rel_type"] = rel_type
     result = _get_bkg().query(req)
-    return json.dumps(result, default=str)
+    return _truncate_tool_output("traverse_graph", json.dumps(result, default=str))
 
 
 @tool
@@ -100,7 +178,7 @@ def get_kpi(node_id: str) -> str:
     If called on a non-KPI node, returns KPIs that reference that node.
     """
     result = _get_bkg().query({"mode": "get_kpi", "node_id": node_id})
-    return json.dumps(result, default=str)
+    return _truncate_tool_output("get_kpi", json.dumps(result, default=str))
 
 
 # ─────────────────────────────────────────────
@@ -117,21 +195,22 @@ def run_python(code: str) -> str:
     that should not be done in your head.
     """
     result = execute_python(code)
-    return json.dumps(result, default=str)
+    return _truncate_tool_output("run_python", json.dumps(result, default=str))
 
 
 @tool
 def run_sql_python(code: str, timeout_seconds: int = 30) -> str:
     """Execute Python code with access to a PostgreSQL database connection.
     Pre-imported: conn (psycopg2 read-only), pd (pandas), np (numpy),
-    go (plotly.graph_objects), px (plotly.express), json.
+    go (plotly.graph_objects), px (plotly.express), json,
+    execute_query (helper: execute_query(sql) -> list[dict]).
     Set result = {...} to return data. DataFrames are auto-converted to records.
     Use this when you need to query PostgreSQL for actual operational data
     (as opposed to the Neo4j Knowledge Graph which describes the data model).
     """
     sandbox = PythonSandbox()
     result = sandbox.execute(code, timeout_seconds)
-    return json.dumps(result, default=str)
+    return _truncate_tool_output("run_sql_python", json.dumps(result, default=str))
 
 
 # ─────────────────────────────────────────────
@@ -148,4 +227,11 @@ def get_all_tools() -> list:
         get_kpi,
         run_python,
         run_sql_python,
+    ]
+
+
+def get_analysis_tools() -> list:
+    """Return tools for the analysis agent (python sandbox only)."""
+    return [
+        run_python,
     ]

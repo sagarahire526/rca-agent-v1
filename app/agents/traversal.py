@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
 
-DEFAULT_MAX_STEPS = 20
+DEFAULT_MAX_STEPS = 10
 
 # ── ANSI colors for terminal output ──
 _CYAN = "\033[96m"
@@ -217,9 +217,11 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
     safe_kg_schema = kg_schema.replace("{", "{{").replace("}", "}}")
     safe_semantic  = semantic_context.replace("{", "{{").replace("}", "}}")
 
+    from datetime import date as _date
     system_prompt = TRAVERSAL_SYSTEM.format(
         kg_schema=safe_kg_schema,
         semantic_context=safe_semantic,
+        today_date=_date.today().isoformat(),
     )
 
     max_steps = state.get("max_traversal_steps", DEFAULT_MAX_STEPS)
@@ -303,9 +305,11 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     safe_kg_schema = kg_schema.replace("{", "{{").replace("}", "}}")
     safe_semantic  = semantic_context.replace("{", "{{").replace("}", "}}")
 
+    from datetime import date as _date
     system_prompt = TRAVERSAL_SYSTEM.format(
         kg_schema=safe_kg_schema,
         semantic_context=safe_semantic,
+        today_date=_date.today().isoformat(),
     )
 
     max_steps = state.get("max_traversal_steps", DEFAULT_MAX_STEPS)

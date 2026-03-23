@@ -50,6 +50,7 @@ def _run_stream_thread(
 
     db_svc.upsert_thread(thread_id, user_id)
     db_svc.create_query(query_id, thread_id, user_id, query)
+    db_svc.auto_name_thread(thread_id, query)
 
     def _on_hitl(payload: dict) -> None:
         db_svc.update_query_paused(query_id)

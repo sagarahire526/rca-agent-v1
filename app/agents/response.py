@@ -1,6 +1,7 @@
 """
-Response Agent — Interprets traversal findings, performs calculations
-via Python sandbox, and generates a PM-readable RCA report.
+Analysis Agent (formerly Response Agent) — ReAct agent that analyzes
+traversal findings, performs data-backed calculations via Python sandbox,
+and generates a PM-readable RCA report.
 
 Handles two upstream paths:
   - Direct traversal path: reads traversal_findings + traversal_tool_calls
@@ -9,24 +10,35 @@ Handles two upstream paths:
 from __future__ import annotations
 
 import json
+import time
 import logging
 from typing import Any
 
-from langchain_core.messages import SystemMessage, HumanMessage
+from langgraph.prebuilt import create_react_agent
 
 from models.state import RCAState
 from services.llm_provider import LLMProvider
-from tools.python_sandbox import execute_python
+from tools.langchain_tools import get_analysis_tools
 from prompts.response_prompt import RESPONSE_SYSTEM
 
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_ANALYSIS_STEPS = 15
 
-def _format_traversal_data(state: RCAState) -> tuple[str, list]:
+# ── ANSI colors for terminal output ──
+_CYAN = "\033[96m"
+_GREEN = "\033[92m"
+_YELLOW = "\033[93m"
+_RED = "\033[91m"
+_DIM = "\033[2m"
+_BOLD = "\033[1m"
+_RESET = "\033[0m"
+
+
+def _format_traversal_data(state: RCAState) -> str:
     """
-    Format traversal findings for the response LLM.
-    Returns (formatted_context_string, effective_tool_calls_list).
+    Format traversal findings into a context string for the analysis agent.
     """
     planner_steps = state.get("planner_steps", [])
     planner_results = state.get("planner_step_results", [])
@@ -34,7 +46,6 @@ def _format_traversal_data(state: RCAState) -> tuple[str, list]:
     # ── Planner path ──
     if planner_steps and planner_results:
         lines = [f"## Investigation Execution — {len(planner_steps)} Parallel Steps\n"]
-        all_tool_calls: list = []
 
         for idx, (step, result) in enumerate(zip(planner_steps, planner_results), 1):
             findings = result.get("traversal_findings", "No findings.")
@@ -50,16 +61,30 @@ def _format_traversal_data(state: RCAState) -> tuple[str, list]:
                 lines.append("\n*Errors in this step:*")
                 for err in step_errors:
                     lines.append(f"- {err}")
+
+            # Include raw successful tool outputs for the analysis agent to parse
+            successful_data = []
+            for tc in tool_calls:
+                if tc["status"] == "success" and tc["tool_output"]:
+                    successful_data.append({
+                        "tool": tc["tool_name"],
+                        "input": tc["tool_input"],
+                        "output": tc["tool_output"],
+                    })
+
+            if successful_data:
+                lines.append(f"\n**Raw Data from Step {idx}** ({len(successful_data)} successful calls):")
+                for sd in successful_data:
+                    lines.append(f"\n`{sd['tool']}` result:")
+                    output = sd["output"]
+                    # Truncate very large outputs but keep enough for analysis
+                    if len(str(output)) > 8000:
+                        output = str(output)[:8000] + "\n... (truncated)"
+                    lines.append(f"```json\n{output}\n```")
+
             lines.append("")
-            all_tool_calls.extend(tool_calls)
 
-        if all_tool_calls:
-            lines.append(f"\n## Tool Call Summary ({len(all_tool_calls)} calls)\n")
-            for i, tc in enumerate(all_tool_calls, 1):
-                status_icon = "OK" if tc["status"] == "success" else "ERR"
-                lines.append(f"- {tc['tool_name']} [{status_icon}]: {_compact_output(tc['tool_output'])}")
-
-        return "\n".join(lines), all_tool_calls
+        return "\n".join(lines)
 
     # ── Direct traversal path ──
     lines = ["## Traversal Agent Findings\n"]
@@ -69,37 +94,96 @@ def _format_traversal_data(state: RCAState) -> tuple[str, list]:
 
     tool_calls = state.get("traversal_tool_calls", [])
     if tool_calls:
-        lines.append(f"\n## Tool Call Summary ({len(tool_calls)} calls)\n")
-        for i, tc in enumerate(tool_calls, 1):
-            status_icon = "OK" if tc["status"] == "success" else "ERR"
-            lines.append(f"- {tc['tool_name']} [{status_icon}]: {_compact_output(tc['tool_output'])}")
+        successful_data = []
+        for tc in tool_calls:
+            if tc["status"] == "success" and tc["tool_output"]:
+                successful_data.append({
+                    "tool": tc["tool_name"],
+                    "input": tc["tool_input"],
+                    "output": tc["tool_output"],
+                })
 
-    return "\n".join(lines), tool_calls
+        if successful_data:
+            lines.append(f"\n**Raw Data** ({len(successful_data)} successful calls):")
+            for sd in successful_data:
+                lines.append(f"\n`{sd['tool']}` result:")
+                output = sd["output"]
+                if len(str(output)) > 8000:
+                    output = str(output)[:8000] + "\n... (truncated)"
+                lines.append(f"```json\n{output}\n```")
+
+    return "\n".join(lines)
 
 
-def _compact_output(raw: str, max_len: int = 200) -> str:
+def _print_divider(char: str = "-", width: int = 70):
+    print(f"{_DIM}{char * width}{_RESET}")
+
+
+def _print_tool_call(step_num: int, tool_name: str, tool_input: dict):
+    _print_divider()
+    print(f"{_BOLD}{_CYAN}  Analysis Step {step_num}: {tool_name}{_RESET}")
+    for key, val in tool_input.items():
+        val_str = str(val)
+        if key == "code":
+            print(f"     {_DIM}{key}:{_RESET}")
+            for line in val_str.splitlines():
+                print(f"       {_DIM}{line}{_RESET}")
+        else:
+            if len(val_str) > 200:
+                val_str = val_str[:200] + "..."
+            print(f"     {_DIM}{key}:{_RESET} {val_str}")
+
+
+def _print_tool_result(status: str, output: str):
+    if status == "error":
+        icon, color = "X", _RED
+    else:
+        icon, color = "OK", _GREEN
+
+    display = output
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(output)
         if isinstance(parsed, dict):
-            if "records" in parsed:
-                return f"{parsed.get('count', len(parsed['records']))} records"
             if "error" in parsed:
-                return f"Error: {str(parsed['error'])[:120]}"
-            if "relevant_nodes" in parsed:
-                return f"{len(parsed['relevant_nodes'])} nodes"
-            if "paths" in parsed:
-                return f"{len(parsed['paths'])} paths"
-            if "status" in parsed and parsed["status"] == "success":
-                return f"OK — {str(parsed.get('result', parsed.get('output', '')))[:150]}"
+                display = f"Error: {parsed['error']}"
+                status = "error"
+            elif "status" in parsed and parsed["status"] == "success":
+                result_val = parsed.get("result", parsed.get("output", ""))
+                display = f"Success: {json.dumps(result_val, default=str)[:500]}"
+            else:
+                display = json.dumps(parsed, indent=2, default=str)
+                if len(display) > 1000:
+                    display = display[:1000] + "\n     ...(truncated)"
+        else:
+            display = str(parsed)
+            if len(display) > 1000:
+                display = display[:1000] + "...(truncated)"
     except (json.JSONDecodeError, TypeError):
-        pass
-    text = str(raw)
-    return text[:max_len] + "..." if len(text) > max_len else text
+        if len(display) > 1000:
+            display = display[:1000] + "...(truncated)"
+
+    color_out = _RED if status == "error" else _GREEN
+    print(f"     {color_out}{icon} Result:{_RESET} {display}")
+
+
+def _print_agent_thinking(content: str):
+    if not content.strip():
+        return
+    text = content.strip()
+    if len(text) > 500:
+        text = text[:500] + "..."
+    print(f"  {_YELLOW}Analysis:{_RESET} {text}")
 
 
 def response_node(state: RCAState) -> dict[str, Any]:
     """
-    LangGraph node: Response Agent for RCA.
+    LangGraph node: Analysis Agent (ReAct) for RCA.
+
+    Uses run_python tool to perform calculations on traversal data,
+    then generates a comprehensive, data-backed RCA report.
+
+    Streams agent execution so every thinking step, tool call, and tool
+    result is logged to the terminal in real-time.
 
     Reads: refined_query (or user_query), traversal/planner data, errors
     Writes: final_response, calculations, data_summary, current_phase, messages
@@ -108,10 +192,10 @@ def response_node(state: RCAState) -> dict[str, Any]:
     llm = provider.get_llm()
 
     user_query = state.get("refined_query") or state["user_query"]
-
-    data_context, effective_tool_calls = _format_traversal_data(state)
+    data_context = _format_traversal_data(state)
     errors = state.get("errors", [])
 
+    # Build the human message with all context
     user_message_parts = [
         f"## Original User Query\n{user_query}",
         f"\n{data_context}",
@@ -129,65 +213,105 @@ def response_node(state: RCAState) -> dict[str, Any]:
 
     user_message_parts.append(
         "\n## Instructions"
-        "\nAnalyze the collected investigation data above and generate a comprehensive, "
-        "PM-readable RCA report. Use the RCA Guidance above (if provided) "
-        "as a reference for structuring your analysis — "
-        "adapt it to what was actually retrieved. Use Python sandbox for any "
-        "calculations — write the code and I will execute it. Include specific "
-        "numbers from the data. If data is missing or queries failed, acknowledge "
-        "it explicitly. Focus on identifying ROOT CAUSES backed by data evidence "
-        "and providing ACTIONABLE recommendations with specific targets."
+        "\nAnalyze the collected investigation data above. Use the run_python tool "
+        "to parse the raw data and compute all metrics, percentages, rankings, and "
+        "comparisons. Do NOT calculate anything in your head — every number in your "
+        "report must come from a run_python execution. After your analysis is complete, "
+        "generate a comprehensive, PM-readable RCA report with specific data-backed "
+        "root causes and actionable recommendations with measurable targets."
     )
 
-    user_message = "\n".join(user_message_parts)
+    human_message = "\n".join(user_message_parts)
 
-    response = llm.invoke([
-        SystemMessage(content=RESPONSE_SYSTEM),
-        HumanMessage(content=user_message),
-    ])
+    # Build the ReAct agent with python sandbox tool
+    tools = get_analysis_tools()
+    agent = create_react_agent(
+        model=llm,
+        tools=tools,
+        prompt=RESPONSE_SYSTEM,
+    )
 
-    final_response = response.content
+    max_steps = DEFAULT_MAX_ANALYSIS_STEPS
 
-    # Execute any Python calculation blocks embedded in the response
-    calculations_output = ""
-    if "```python" in final_response:
-        code_blocks = final_response.split("```python")
-        for block in code_blocks[1:]:
-            code = block.split("```")[0].strip()
-            if not code:
-                continue
-            exec_context = {}
-            for i, tc in enumerate(effective_tool_calls):
-                if tc["status"] == "success" and tc["tool_output"]:
-                    try:
-                        parsed = json.loads(tc["tool_output"])
-                        exec_context[f"call_{i}_{tc['tool_name']}"] = parsed
-                    except (json.JSONDecodeError, TypeError):
-                        exec_context[f"call_{i}_{tc['tool_name']}"] = tc["tool_output"]
+    # ── Live-streaming execution ──
+    print(f"\n{_BOLD}{'=' * 70}")
+    print(f"  ANALYSIS AGENT — Generating Data-Backed RCA Report")
+    print(f"{'=' * 70}{_RESET}")
+    print(f"  {_DIM}Query: {user_query[:80]}{_RESET}\n")
 
-            calc_result = execute_python(code, exec_context)
-            if calc_result["status"] == "success":
-                calculations_output += (
-                    f"Calculation:\n{code}\n"
-                    f"Output: {calc_result.get('output', '')}\n"
-                    f"Result: {calc_result.get('result')}\n\n"
-                )
+    start_time = time.perf_counter()
+    step_num = 0
+    final_response = ""
 
-    # Build data summary from all successful tool calls
-    data_summary: dict[str, Any] = {}
-    for i, tc in enumerate(effective_tool_calls):
-        if tc["status"] == "success" and tc["tool_output"]:
-            try:
-                data_summary[f"call_{i}_{tc['tool_name']}"] = json.loads(tc["tool_output"])
-            except (json.JSONDecodeError, TypeError):
-                data_summary[f"call_{i}_{tc['tool_name']}"] = tc["tool_output"]
+    try:
+        for chunk in agent.stream(
+            {"messages": [("human", human_message)]},
+            config={"recursion_limit": max_steps * 3 + 10},
+            stream_mode="updates",
+        ):
+            for node_name, node_output in chunk.items():
+                messages = node_output.get("messages", [])
 
-    logger.info("Response agent generated RCA report")
+                for msg in messages:
+                    # ── AI message: thinking or tool call ──
+                    if msg.type == "ai":
+                        text = getattr(msg, "content", "") or ""
 
-    return {
-        "final_response": final_response,
-        "calculations": calculations_output,
-        "data_summary": data_summary,
-        "current_phase": "complete",
-        "messages": [{"agent": "response", "content": "Generated RCA report"}],
-    }
+                        # Agent reasoning (no tool call attached)
+                        if text.strip() and not getattr(msg, "tool_calls", None):
+                            _print_agent_thinking(text)
+                            final_response = text
+
+                        # Tool calls the agent wants to make
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            for tc in msg.tool_calls:
+                                step_num += 1
+                                _print_tool_call(step_num, tc["name"], tc["args"])
+
+                    # ── Tool result message ──
+                    elif msg.type == "tool":
+                        output = msg.content or ""
+                        status = "error" if "error" in output.lower()[:200] else "success"
+                        _print_tool_result(status, output)
+
+        elapsed = time.perf_counter() - start_time
+
+        _print_divider("=")
+        print(f"  {_BOLD}Analysis complete: {step_num} calculations performed in {elapsed:.1f}s{_RESET}")
+        _print_divider("=")
+        print()
+
+        logger.info(
+            "Analysis agent completed: %d calculations in %.1fs",
+            step_num, elapsed,
+        )
+
+        return {
+            "final_response": final_response,
+            "calculations": f"{step_num} python calculations executed",
+            "data_summary": {},
+            "current_phase": "complete",
+            "messages": [{
+                "agent": "analysis",
+                "content": (
+                    f"Analysis complete: {step_num} calculations, "
+                    f"{elapsed:.1f}s elapsed"
+                ),
+            }],
+        }
+
+    except Exception as e:
+        elapsed = time.perf_counter() - start_time
+        print(f"\n  {_RED}Analysis failed after {elapsed:.1f}s: {e}{_RESET}\n")
+        logger.error("Analysis agent failed: %s", e)
+        return {
+            "final_response": f"Analysis failed: {e}",
+            "calculations": "",
+            "data_summary": {},
+            "current_phase": "complete",
+            "errors": [f"Analysis agent error: {e}"],
+            "messages": [{
+                "agent": "analysis",
+                "content": f"Analysis failed after {elapsed:.1f}s: {e}",
+            }],
+        }
