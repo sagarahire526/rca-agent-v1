@@ -18,7 +18,7 @@ from langgraph.prebuilt import create_react_agent
 
 from models.state import RCAState, ToolCallRecord
 from services.llm_provider import LLMProvider
-from tools.langchain_tools import get_all_tools
+from tools.langchain_tools import get_fast_tools
 from prompts.traversal_prompt import TRAVERSAL_SYSTEM
 from services.semantic_service import SemanticService
 
@@ -278,7 +278,7 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
 
     max_steps = state.get("max_traversal_steps", DEFAULT_MAX_STEPS)
 
-    tools = get_all_tools(project_type=project_type)
+    tools = get_fast_tools(project_type=project_type)
     agent = create_react_agent(
         model=llm,
         tools=tools,
@@ -372,7 +372,7 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     )
 
     max_steps = state.get("max_traversal_steps", DEFAULT_MAX_STEPS)
-    tools = get_all_tools(project_type=project_type)
+    tools = get_fast_tools(project_type=project_type)
     agent = create_react_agent(model=llm, tools=tools, prompt=system_prompt)
 
     query = state["user_query"]

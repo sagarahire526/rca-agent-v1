@@ -312,6 +312,26 @@ def get_all_tools(project_type: str = "") -> list:
     ]
 
 
+def get_fast_tools(project_type: str = "") -> list:
+    """Minimal tool set for the traversal agent.
+
+    Removes find_relevant (schema is in prompt), traverse_graph (never needed
+    when schema is embedded), and run_cypher (run_sql_python covers all cases).
+    Smaller decision surface = faster LLM reasoning per round trip.
+    """
+    sql_tool = (
+        _make_filtered_run_sql_python(project_type)
+        if project_type
+        else run_sql_python
+    )
+    return [
+        get_kpi,
+        get_node,
+        sql_tool,
+        run_python,
+    ]
+
+
 def get_analysis_tools() -> list:
     """Return tools for the analysis agent (python sandbox only)."""
     return [
