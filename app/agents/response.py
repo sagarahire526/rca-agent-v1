@@ -24,7 +24,7 @@ from prompts.response_prompt import RESPONSE_SYSTEM
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_ANALYSIS_STEPS = 15
+MAX_TOOL_CALLS = 5
 
 # ── ANSI colors for terminal output ──
 _CYAN = "\033[96m"
@@ -231,22 +231,22 @@ def response_node(state: RCAState) -> dict[str, Any]:
         prompt=RESPONSE_SYSTEM,
     )
 
-    max_steps = DEFAULT_MAX_ANALYSIS_STEPS
-
     # ── Live-streaming execution ──
     print(f"\n{_BOLD}{'=' * 70}")
     print(f"  ANALYSIS AGENT — Generating Data-Backed RCA Report")
     print(f"{'=' * 70}{_RESET}")
-    print(f"  {_DIM}Query: {user_query[:80]}{_RESET}\n")
+    print(f"  {_DIM}Query: {user_query[:80]}{_RESET}")
+    print(f"  {_DIM}Max tool calls: {MAX_TOOL_CALLS}{_RESET}\n")
 
     start_time = time.perf_counter()
     step_num = 0
     final_response = ""
+    limit_hit = False
 
     try:
         for chunk in agent.stream(
             {"messages": [("human", human_message)]},
-            config={"recursion_limit": max_steps * 3 + 10},
+            config={"recursion_limit": MAX_TOOL_CALLS * 3 + 10},
             stream_mode="updates",
         ):
             for node_name, node_output in chunk.items():
@@ -274,16 +274,24 @@ def response_node(state: RCAState) -> dict[str, Any]:
                         status = "error" if "error" in output.lower()[:200] else "success"
                         _print_tool_result(status, output)
 
+            # ── Hard stop after MAX_TOOL_CALLS ──
+            if step_num >= MAX_TOOL_CALLS:
+                print(f"\n  {_YELLOW}Tool call limit reached ({MAX_TOOL_CALLS}). "
+                      f"Finalizing report with data collected so far.{_RESET}")
+                limit_hit = True
+                break
+
         elapsed = time.perf_counter() - start_time
 
         _print_divider("=")
-        print(f"  {_BOLD}Analysis complete: {step_num} calculations performed in {elapsed:.1f}s{_RESET}")
+        suffix = " (limit reached)" if limit_hit else ""
+        print(f"  {_BOLD}Analysis complete: {step_num} calculations performed in {elapsed:.1f}s{suffix}{_RESET}")
         _print_divider("=")
         print()
 
         logger.info(
-            "Analysis agent completed: %d calculations in %.1fs",
-            step_num, elapsed,
+            "Analysis agent completed: %d calculations in %.1fs%s",
+            step_num, elapsed, suffix,
         )
 
         return {

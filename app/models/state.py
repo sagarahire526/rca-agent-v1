@@ -41,6 +41,9 @@ class RCAState(TypedDict):
         "planning", "traversal", "response", "complete", "error"
     ]
 
+    # ── Project type filter ──
+    project_type: str            # "NTM" | "AHLOB Modernization" | ""
+
     # ── Orchestrator routing ──
     routing_decision: str        # "greeting" | "rca" | "traversal"
     routing_context: str         # For greeting: direct response text

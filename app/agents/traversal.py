@@ -28,6 +28,48 @@ logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
 
 DEFAULT_MAX_STEPS = 10
 
+_BOTH_SMP_VALUES = ("NTM", "AHLOB Modernization")
+
+
+def _build_project_type_filter(project_type: str) -> str:
+    """Build the prompt instruction for smp_name filtering on macro_combined."""
+    if not project_type:
+        return ""
+
+    if project_type == "Both":
+        smp_clause = f"smp_name IN ('{_BOTH_SMP_VALUES[0]}', '{_BOTH_SMP_VALUES[1]}')"
+        return (
+            f'\n12. **MANDATORY Project Type Filter**: The user selected **Both** project types. '
+            f'Whenever you query the table '
+            f'`pwc_macro_staging_schema.stg_ndpd_mbt_tmobile_macro_combined`, '
+            f'you MUST include `WHERE {smp_clause}` (or add it as '
+            f'an AND condition if other WHERE clauses exist). This filter is NON-NEGOTIABLE '
+            f'— every single SQL query touching this table must have it. '
+            f'This filter applies ONLY to `stg_ndpd_mbt_tmobile_macro_combined` — '
+            f'do NOT add it to other tables. '
+            f'When comparing project types, GROUP BY smp_name to show results side by side.\n'
+            f'13. **NEVER use `pj_project_type`** to filter project type (AHLOA, NTM, etc.). '
+            f'The correct column is ALWAYS `smp_name`. `pj_project_type` does NOT exist for '
+            f'this purpose. If you see project type values like AHLOA, NTM, AHLOB — filter '
+            f'with `smp_name`, never `pj_project_type`.'
+        )
+
+    return (
+        f'\n12. **MANDATORY Project Type Filter**: The user selected project type '
+        f'**{project_type}**. Whenever you query the table '
+        f'`pwc_macro_staging_schema.stg_ndpd_mbt_tmobile_macro_combined`, '
+        f'you MUST include `WHERE smp_name = \'{project_type}\'` (or add it as '
+        f'an AND condition if other WHERE clauses exist). This filter is NON-NEGOTIABLE '
+        f'— every single SQL query touching this table must have it. '
+        f'This filter applies ONLY to `stg_ndpd_mbt_tmobile_macro_combined` — '
+        f'do NOT add it to other tables.\n'
+        f'13. **NEVER use `pj_project_type`** to filter project type (AHLOA, NTM, etc.). '
+        f'The correct column is ALWAYS `smp_name`. `pj_project_type` does NOT exist for '
+        f'this purpose. If you see project type values like AHLOA, NTM, AHLOB — filter '
+        f'with `smp_name`, never `pj_project_type`.'
+    )
+
+
 # ── ANSI colors for terminal output ──
 _CYAN = "\033[96m"
 _GREEN = "\033[92m"
@@ -217,16 +259,26 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
     safe_kg_schema = kg_schema.replace("{", "{{").replace("}", "}}")
     safe_semantic  = semantic_context.replace("{", "{{").replace("}", "}}")
 
+    # ── Build project-type filter instruction for the prompt ──
+    project_type = state.get("project_type", "")
+    print(f"  {_DIM}Project type in state: '{project_type}'{_RESET}", flush=True)
+    project_type_filter = _build_project_type_filter(project_type)
+    if project_type_filter:
+        print(f"  {_GREEN}Project type filter injected for: {project_type}{_RESET}", flush=True)
+    else:
+        print(f"  {_YELLOW}No project type in state — smp_name filter NOT applied{_RESET}", flush=True)
+
     from datetime import date as _date
     system_prompt = TRAVERSAL_SYSTEM.format(
         kg_schema=safe_kg_schema,
         semantic_context=safe_semantic,
         today_date=_date.today().isoformat(),
+        project_type_filter=project_type_filter,
     )
 
     max_steps = state.get("max_traversal_steps", DEFAULT_MAX_STEPS)
 
-    tools = get_all_tools()
+    tools = get_all_tools(project_type=project_type)
     agent = create_react_agent(
         model=llm,
         tools=tools,
@@ -305,15 +357,22 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     safe_kg_schema = kg_schema.replace("{", "{{").replace("}", "}}")
     safe_semantic  = semantic_context.replace("{", "{{").replace("}", "}}")
 
+    # ── Build project-type filter instruction for the prompt ──
+    project_type = state.get("project_type", "")
+    project_type_filter = _build_project_type_filter(project_type)
+    if project_type_filter:
+        print(f"  {_GREEN}[async] Project type filter injected for: {project_type}{_RESET}", flush=True)
+
     from datetime import date as _date
     system_prompt = TRAVERSAL_SYSTEM.format(
         kg_schema=safe_kg_schema,
         semantic_context=safe_semantic,
         today_date=_date.today().isoformat(),
+        project_type_filter=project_type_filter,
     )
 
     max_steps = state.get("max_traversal_steps", DEFAULT_MAX_STEPS)
-    tools = get_all_tools()
+    tools = get_all_tools(project_type=project_type)
     agent = create_react_agent(model=llm, tools=tools, prompt=system_prompt)
 
     query = state["user_query"]

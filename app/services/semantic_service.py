@@ -29,7 +29,7 @@ import config
 logger = logging.getLogger(__name__)
 
 _TABLES = ("kpi", "question_bank", "simulation")
-_DEFAULT_TOP_K = 2
+_DEFAULT_TOP_K = 1
 _REQUEST_TIMEOUT = 15  # seconds
 
 # Known structured keys inside the simulation table's content dict

@@ -7,9 +7,10 @@ Wraps existing tools (neo4j_tool, bkg_tool, python_sandbox) as
 from __future__ import annotations
 
 import json
+import re
 from typing import Optional
 
-from langchain_core.tools import tool
+from langchain_core.tools import tool, StructuredTool
 
 from tools.neo4j_tool import neo4j_tool
 from tools.bkg_tool import BKGTool
@@ -214,11 +215,92 @@ def run_sql_python(code: str, timeout_seconds: int = 30) -> str:
 
 
 # ─────────────────────────────────────────────
+# Project-type filter enforcement on SQL tool
+# ─────────────────────────────────────────────
+
+_MACRO_TABLE = "stg_ndpd_mbt_tmobile_macro_combined"
+_BOTH_SMP_VALUES = ("NTM", "AHLOB Modernization")
+
+
+def _check_macro_combined_filter(code: str, project_type: str) -> str | None:
+    """
+    If code references the macro_combined table, verify that the correct
+    smp_name filter is present. Returns an error message if missing, else None.
+    """
+    if _MACRO_TABLE not in code:
+        return None
+
+    if project_type == "Both":
+        # Must have IN clause with both values
+        has_in = re.search(
+            r"smp_name\s+IN\s*\(",
+            code,
+            re.IGNORECASE,
+        )
+        has_both = (
+            _BOTH_SMP_VALUES[0] in code and _BOTH_SMP_VALUES[1] in code
+        )
+        if has_in and has_both:
+            return None
+        return (
+            f"ERROR: Your SQL references `{_MACRO_TABLE}` but is missing the "
+            f"mandatory filter: smp_name IN ('{_BOTH_SMP_VALUES[0]}', '{_BOTH_SMP_VALUES[1]}'). "
+            f"Add this WHERE/AND condition and retry."
+        )
+
+    # Single project type
+    pattern = re.compile(
+        rf"smp_name\s*=\s*'{re.escape(project_type)}'",
+        re.IGNORECASE,
+    )
+    if pattern.search(code):
+        return None
+    return (
+        f"ERROR: Your SQL references `{_MACRO_TABLE}` but is missing the "
+        f"mandatory filter: smp_name = '{project_type}'. "
+        f"Add this WHERE/AND condition and retry."
+    )
+
+
+def _make_filtered_run_sql_python(project_type: str) -> StructuredTool:
+    """Create a run_sql_python tool that validates smp_name filter before execution."""
+
+    @tool
+    def run_sql_python_filtered(code: str, timeout_seconds: int = 30) -> str:
+        """Execute Python code with access to a PostgreSQL database connection.
+        Pre-imported: conn (psycopg2 read-only), pd (pandas), np (numpy),
+        go (plotly.graph_objects), px (plotly.express), json,
+        execute_query (helper: execute_query(sql) -> list[dict]).
+        Set result = {...} to return data. DataFrames are auto-converted to records.
+        Use this when you need to query PostgreSQL for actual operational data
+        (as opposed to the Neo4j Knowledge Graph which describes the data model).
+        """
+        # Validate filter before execution
+        err = _check_macro_combined_filter(code, project_type)
+        if err:
+            return json.dumps({"status": "error", "error": err})
+
+        sandbox = PythonSandbox()
+        result = sandbox.execute(code, timeout_seconds)
+        return _truncate_tool_output("run_sql_python", json.dumps(result, default=str))
+
+    # Keep the tool name as run_sql_python so the agent sees the same name
+    run_sql_python_filtered.name = "run_sql_python"
+    return run_sql_python_filtered
+
+
+# ─────────────────────────────────────────────
 # Tool registry
 # ─────────────────────────────────────────────
 
-def get_all_tools() -> list:
-    """Return all tools for the traversal agent."""
+def get_all_tools(project_type: str = "") -> list:
+    """Return all tools for the traversal agent.
+    When project_type is set, run_sql_python gets filter validation."""
+    sql_tool = (
+        _make_filtered_run_sql_python(project_type)
+        if project_type
+        else run_sql_python
+    )
     return [
         run_cypher,
         get_node,
@@ -226,7 +308,7 @@ def get_all_tools() -> list:
         traverse_graph,
         get_kpi,
         run_python,
-        run_sql_python,
+        sql_tool,
     ]
 
 

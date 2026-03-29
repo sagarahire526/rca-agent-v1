@@ -47,6 +47,7 @@ def _shape_response(state: dict) -> dict:
 
 def run_query(
     query: str,
+    project_type: str = "",
     thread_id: str = "default",
     user_id: str = "anonymous",
 ) -> dict:
@@ -64,7 +65,7 @@ def run_query(
     logger.info("Starting RCA query [thread=%s query=%s]: %.80s", thread_id, query_id, query)
 
     try:
-        state = run_rca(query, thread_id=thread_id)
+        state = run_rca(query, project_type=project_type, thread_id=thread_id)
     except Exception:
         duration_ms = round((time.perf_counter() - t0) * 1000, 1)
         db_svc.update_query_error(query_id, duration_ms)

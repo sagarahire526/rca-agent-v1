@@ -20,6 +20,8 @@ from pydantic import BaseModel
 import services.db_service as db_svc
 from graph import stream_rca
 from services.sse_manager import sse_manager
+from services.trace_builder import build_traces
+from api.v1.schemas import ProjectType
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ class StreamResumeRequest(BaseModel):
 
 def _run_stream_thread(
     query: str,
+    project_type: str,
     query_id: str,
     thread_id: str,
     user_id: str,
@@ -50,7 +53,6 @@ def _run_stream_thread(
 
     db_svc.upsert_thread(thread_id, user_id)
     db_svc.create_query(query_id, thread_id, user_id, query)
-    db_svc.auto_name_thread(thread_id, query)
 
     def _on_hitl(payload: dict) -> None:
         db_svc.update_query_paused(query_id)
@@ -67,9 +69,13 @@ def _run_stream_thread(
             query_id=query_id,
             thread_id=thread_id,
             mgr=sse_manager,
+            project_type=project_type,
             on_hitl=_on_hitl,
         )
         duration_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+        nodes_executed = final_state.pop("_nodes_executed", [])
+        traces = build_traces(final_state, nodes_executed, duration_ms)
 
         db_svc.update_query_complete(
             query_id=query_id,
@@ -78,6 +84,7 @@ def _run_stream_thread(
             planner_steps=final_state.get("planner_steps", []),
             final_response=final_state.get("final_response", ""),
             duration_ms=duration_ms,
+            traces=traces,
         )
         sse_manager.put_sync(query_id, "complete", {
             "final_response":    final_state.get("final_response", ""),
@@ -86,6 +93,7 @@ def _run_stream_thread(
             "planning_rationale": final_state.get("planning_rationale", ""),
             "traversal_steps":   final_state.get("traversal_steps_taken", 0),
             "errors":            final_state.get("errors", []),
+            "traces":            traces,
         })
 
     except Exception as exc:
@@ -122,9 +130,10 @@ async def _event_generator(
 
 @router.get("/stream")
 async def stream_analyze(
-    query:     str = Query(..., description="The RCA query"),
-    user_id:   str = Query(..., description="User identifier"),
-    thread_id: str = Query(None, description="Conversation thread ID"),
+    query:        str = Query(..., description="The RCA query"),
+    user_id:      str = Query(..., description="User identifier"),
+    project_type: ProjectType = Query(..., description="Project type"),
+    thread_id:    str = Query(None, description="Conversation thread ID"),
 ):
     """Start a streaming RCA investigation. Returns text/event-stream."""
     if not query.strip():
@@ -142,7 +151,7 @@ async def stream_analyze(
     loop.run_in_executor(
         None,
         _run_stream_thread,
-        query, query_id, thread_id, user_id,
+        query, project_type.value, query_id, thread_id, user_id,
     )
 
     async def _stream_with_preamble() -> AsyncGenerator[str, None]:

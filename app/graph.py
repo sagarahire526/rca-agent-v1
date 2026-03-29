@@ -105,10 +105,11 @@ def _print_phase_timings(timings: dict[str, float], total_ms: float) -> None:
     print("-" * 52 + "\n")
 
 
-def _make_initial_state(query: str, max_steps: int) -> RCAState:
+def _make_initial_state(query: str, project_type: str, max_steps: int) -> RCAState:
     return {
         "user_query": query,
         "refined_query": "",
+        "project_type": project_type,
         "current_phase": "query_refinement",
         "routing_decision": "",
         "routing_context": "",
@@ -133,12 +134,13 @@ def _make_initial_state(query: str, max_steps: int) -> RCAState:
 
 def run_rca(
     query: str,
+    project_type: str = "",
     max_steps: int = 20,
     thread_id: str = "default",
 ) -> dict:
     """Start a new RCA investigation end-to-end."""
     thread_config = {"configurable": {"thread_id": thread_id}}
-    initial_state = _make_initial_state(query, max_steps)
+    initial_state = _make_initial_state(query, project_type, max_steps)
 
     logger.info("Starting RCA [thread=%s]: %s", thread_id, query)
 
@@ -248,12 +250,13 @@ def stream_rca(
     query_id: str,
     thread_id: str,
     mgr,
+    project_type: str = "",
     max_steps: int = 20,
     on_hitl=None,
 ) -> dict:
     """Stream the RCA graph end-to-end, pushing SSE events via mgr."""
     thread_config = {"configurable": {"thread_id": thread_id}}
-    initial_state = _make_initial_state(query, max_steps)
+    initial_state = _make_initial_state(query, project_type, max_steps)
 
     logger.info(
         "Streaming RCA [thread=%s query=%s]: %.80s",
@@ -311,6 +314,7 @@ def stream_rca(
     _print_phase_timings(timings, total_ms)
 
     final_state = dict(_graph.get_state(thread_config).values)
+    final_state["_nodes_executed"] = list(timings.keys())
     logger.info("Streaming complete [thread=%s query=%s]", thread_id, query_id)
     return final_state
 

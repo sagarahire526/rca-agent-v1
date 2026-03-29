@@ -87,11 +87,30 @@ def ensure_tables() -> None:
             answered_at         TIMESTAMP,
             was_skipped         BOOLEAN         DEFAULT FALSE
         );
+
+        CREATE TABLE IF NOT EXISTS {_SCHEMA}.rca_agent_feedback (
+            feedback_id     VARCHAR(100)    PRIMARY KEY,
+            thread_id       VARCHAR(100)    NOT NULL
+                                REFERENCES {_SCHEMA}.rca_agent_threads(thread_id),
+            query_id        VARCHAR(100)    NOT NULL
+                                REFERENCES {_SCHEMA}.rca_agent_queries(query_id),
+            user_id         VARCHAR(100)    NOT NULL,
+            username        VARCHAR(255)    NOT NULL,
+            rating          SMALLINT,
+            is_positive     BOOLEAN,
+            comment         TEXT,
+            created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+        );
+    """
+    migrate_ddl = f"""
+        ALTER TABLE {_SCHEMA}.rca_agent_queries
+            ADD COLUMN IF NOT EXISTS traces JSONB;
     """
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(ddl)
+                cur.execute(migrate_ddl)
         logger.info("pwc_rca_agent_schema tables verified / created.")
     except Exception as exc:
         logger.error("ensure_tables failed: %s", exc)
@@ -213,12 +232,15 @@ def update_query_complete(
     planner_steps: list[str],
     final_response: str,
     duration_ms: float,
+    traces: dict | None = None,
 ) -> None:
     """
     Finalize a completed query.
     planning_rationale is stored as a JSON array of the planner steps.
+    traces is stored as a JSONB object with execution trace details.
     """
     planning_rationale = json.dumps(planner_steps) if planner_steps else None
+    traces_json = json.dumps(traces) if traces else None
     _exec(
         f"""
         UPDATE {_SCHEMA}.rca_agent_queries SET
@@ -228,6 +250,7 @@ def update_query_complete(
             final_response     = %s,
             completed_at       = NOW(),
             duration_ms        = %s,
+            traces             = %s,
             status             = 'complete'
         WHERE query_id = %s
         """,
@@ -237,6 +260,7 @@ def update_query_complete(
             planning_rationale,
             final_response,
             duration_ms,
+            traces_json,
             query_id,
         ),
     )
@@ -365,12 +389,16 @@ def get_thread(thread_id: str) -> dict | None:
 def delete_thread(thread_id: str) -> bool:
     """
     Delete a thread and all its child rows.
-    Deletes in FK order: hitl_clarifications → queries → threads.
+    Deletes in FK order: feedback → hitl_clarifications → queries → threads.
     Returns True if the thread existed and was deleted.
     """
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {_SCHEMA}.rca_agent_feedback WHERE thread_id = %s",
+                    (thread_id,),
+                )
                 cur.execute(
                     f"DELETE FROM {_SCHEMA}.rca_agent_hitl_clarifications WHERE thread_id = %s",
                     (thread_id,),
@@ -405,6 +433,7 @@ def get_messages_by_thread(thread_id: str) -> list[dict]:
             started_at,
             completed_at,
             duration_ms,
+            traces,
             status
         FROM {_SCHEMA}.rca_agent_queries
         WHERE thread_id = %s
@@ -437,3 +466,74 @@ def get_pending_clarification(thread_id: str) -> dict | None:
         """,
         (thread_id,),
     )
+
+
+# ─────────────────────────────────────────────
+# feedback
+# ─────────────────────────────────────────────
+
+def create_feedback(
+    feedback_id: str,
+    thread_id: str,
+    query_id: str,
+    user_id: str,
+    username: str,
+    rating: int | None = None,
+    is_positive: bool | None = None,
+    comment: str | None = None,
+) -> None:
+    """Insert a feedback entry linked to a specific query turn."""
+    _exec(
+        f"""
+        INSERT INTO {_SCHEMA}.rca_agent_feedback
+            (feedback_id, thread_id, query_id, user_id, username,
+             rating, is_positive, comment, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        """,
+        (feedback_id, thread_id, query_id, user_id, username, rating, is_positive, comment),
+    )
+
+
+def get_feedback_for_query(query_id: str) -> list[dict]:
+    """Return all feedback entries for a specific query turn."""
+    return _fetch_rows(
+        f"""
+        SELECT feedback_id, thread_id, query_id, user_id, username,
+               rating, is_positive, comment, created_at
+        FROM {_SCHEMA}.rca_agent_feedback
+        WHERE query_id = %s
+        ORDER BY created_at ASC
+        """,
+        (query_id,),
+    )
+
+
+def get_feedback_for_thread(thread_id: str) -> list[dict]:
+    """Return all feedback entries for a given thread."""
+    return _fetch_rows(
+        f"""
+        SELECT feedback_id, thread_id, query_id, user_id, username,
+               rating, is_positive, comment, created_at
+        FROM {_SCHEMA}.rca_agent_feedback
+        WHERE thread_id = %s
+        ORDER BY created_at ASC
+        """,
+        (thread_id,),
+    )
+
+
+def get_feedback_stats(thread_id: str | None = None) -> dict:
+    """Return aggregate feedback stats (count, avg rating, thumbs up/down)."""
+    where = "WHERE thread_id = %s" if thread_id else ""
+    params = (thread_id,) if thread_id else ()
+    sql = f"""
+        SELECT
+            COUNT(*) AS total,
+            ROUND(AVG(rating)::numeric, 2) AS avg_rating,
+            COUNT(*) FILTER (WHERE is_positive = true) AS thumbs_up,
+            COUNT(*) FILTER (WHERE is_positive = false) AS thumbs_down
+        FROM {_SCHEMA}.rca_agent_feedback
+        {where}
+    """
+    row = _fetch_row(sql, params)
+    return row if row else {"total": 0, "avg_rating": None, "thumbs_up": 0, "thumbs_down": 0}
