@@ -13,7 +13,6 @@ import asyncio
 import json
 import logging
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -167,9 +166,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     # ── Step 3: Execute each step concurrently ──
     print(f"  {_BOLD}Executing {len(steps)} traversal(s) in parallel...{_RESET}\n")
 
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="planner-async") as executor:
-        future = executor.submit(asyncio.run, _gather_traversals(steps, state))
-        gathered = future.result(timeout=_STEP_TIMEOUT_SEC + 60)
+    gathered = asyncio.run(_gather_traversals(steps, state))
 
     step_results: list[dict] = []
     for idx, result in enumerate(gathered):
