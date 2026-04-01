@@ -87,6 +87,5 @@ Nothing else.
 - Tables for ALL numeric data.
 - Bold key numbers inline.
 - No technical node IDs or KPI IDs — human-readable text only.
-- Use run_python for ALL math — never calculate in your head.
-- On failure: read error, fix code, retry up to 3 times maximum.
+- Use pre-computed aggregates from traversal data directly. Only use run_python for derived metrics not already in the data (max 2 calls).
 """

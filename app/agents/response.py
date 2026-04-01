@@ -14,6 +14,7 @@ import time
 import logging
 from typing import Any
 
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.prebuilt import create_react_agent
 
 from models.state import RCAState
@@ -24,7 +25,7 @@ from prompts.response_prompt import RESPONSE_SYSTEM
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_CALLS = 5
+MAX_TOOL_CALLS = 3
 
 # ── ANSI colors for terminal output ──
 _CYAN = "\033[96m"
@@ -213,12 +214,13 @@ def response_node(state: RCAState) -> dict[str, Any]:
 
     user_message_parts.append(
         "\n## Instructions"
-        "\nAnalyze the collected investigation data above. Use the run_python tool "
-        "to parse the raw data and compute all metrics, percentages, rankings, and "
-        "comparisons. Do NOT calculate anything in your head — every number in your "
-        "report must come from a run_python execution. After your analysis is complete, "
-        "generate a comprehensive, PM-readable RCA report with specific data-backed "
-        "root causes and actionable recommendations with measurable targets."
+        "\nAnalyze the collected investigation data above. Most numbers you need "
+        "are already in the traversal data — use them directly. Only use the "
+        "run_python tool when you need to derive a non-obvious metric "
+        "(e.g., correlations, trend slopes, weighted averages) that isn't already "
+        "present in the data. Limit yourself to at most 2 run_python calls. "
+        "After analysis, generate a concise, PM-readable RCA report with "
+        "data-backed root causes and actionable recommendations."
     )
 
     human_message = "\n".join(user_message_parts)
@@ -242,6 +244,7 @@ def response_node(state: RCAState) -> dict[str, Any]:
     step_num = 0
     final_response = ""
     limit_hit = False
+    tool_results: list[str] = []
 
     try:
         for chunk in agent.stream(
@@ -273,6 +276,7 @@ def response_node(state: RCAState) -> dict[str, Any]:
                         output = msg.content or ""
                         status = "error" if "error" in output.lower()[:200] else "success"
                         _print_tool_result(status, output)
+                        tool_results.append(output)
 
             # ── Hard stop after MAX_TOOL_CALLS ──
             if step_num >= MAX_TOOL_CALLS:
@@ -280,6 +284,22 @@ def response_node(state: RCAState) -> dict[str, Any]:
                       f"Finalizing report with data collected so far.{_RESET}")
                 limit_hit = True
                 break
+
+        # ── Fallback: generate report if agent didn't produce one ──
+        if not final_response.strip():
+            print(f"  {_YELLOW}No final response from agent — generating via direct LLM call.{_RESET}")
+            tool_context = ""
+            if tool_results:
+                tool_context = (
+                    "\n\n## Computation Results\n"
+                    + "\n\n".join(tool_results)
+                )
+            fallback_response = llm.invoke([
+                SystemMessage(content=RESPONSE_SYSTEM),
+                HumanMessage(content=human_message + tool_context
+                             + "\n\nGenerate the final report now. Do NOT call any tools."),
+            ])
+            final_response = fallback_response.content
 
         elapsed = time.perf_counter() - start_time
 
