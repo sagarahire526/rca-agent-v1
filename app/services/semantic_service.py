@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 _TABLES = ("kpi", "question_bank", "simulation")
 _DEFAULT_TOP_K = 1
+_TABLE_TOP_K: dict[str, int] = {
+    "kpi":           5,
+    "question_bank": 5,
+    "simulation":    1,
+    "keywords":      10,
+}
 _REQUEST_TIMEOUT = 15  # seconds
 
 # Known structured keys inside the simulation table's content dict
@@ -156,10 +162,14 @@ class SemanticService:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=len(_TABLES) + 1) as executor:
             futures = {
-                table: executor.submit(self._search, query, table, top_k)
+                table: executor.submit(
+                    self._search, query, table, _TABLE_TOP_K.get(table, top_k),
+                )
                 for table in _TABLES
             }
-            futures["keywords"] = executor.submit(self._search_keywords, query, top_k)
+            futures["keywords"] = executor.submit(
+                self._search_keywords, query, _TABLE_TOP_K.get("keywords", top_k),
+            )
         return {table: fut.result() for table, fut in futures.items()}
 
     # ── Context formatting ─────────────────────────────────────────────────
