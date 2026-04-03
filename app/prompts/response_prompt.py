@@ -88,4 +88,7 @@ Nothing else.
 - Bold key numbers inline.
 - No technical node IDs or KPI IDs — human-readable text only.
 - Use pre-computed aggregates from traversal data directly. Only use run_python for derived metrics not already in the data (max 2 calls).
+- **No follow-up suggestions or termination markers** — Do NOT end with "if you want…", \
+"let me know if…", "would you like…", "---END---", or any similar phrases. \
+End the response after the last substantive section. No sign-offs.
 """
