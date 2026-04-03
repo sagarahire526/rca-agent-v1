@@ -242,14 +242,15 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
             kpi_hits = len(context_data.get("kpi", []))
             qb_hits  = len(context_data.get("question_bank", []))
             sim_hits = len(context_data.get("simulation", []))
-            total    = kpi_hits + qb_hits + sim_hits
+            kw_hits  = len(context_data.get("keywords", []))
+            total    = kpi_hits + qb_hits + sim_hits + kw_hits
 
             if total:
                 semantic_context    = semantic.format_traversal_context(context_data)
                 rca_guidance = semantic.format_simulation_guidance(context_data)
                 print(
                     f"\n{_GREEN}  Semantic context: "
-                    f"{kpi_hits} KPI, {qb_hits} Q&A, {sim_hits} scenario result(s){_RESET}"
+                    f"{kpi_hits} KPI, {qb_hits} Q&A, {sim_hits} scenario(s), {kw_hits} keyword(s){_RESET}"
                 )
             else:
                 print(f"\n{_DIM}  No semantic context retrieved.{_RESET}")

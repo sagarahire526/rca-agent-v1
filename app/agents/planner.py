@@ -120,9 +120,10 @@ def planner_node(state: RCAState) -> dict[str, Any]:
             kpi_hits = len(context_data.get("kpi", []))
             qb_hits  = len(context_data.get("question_bank", []))
             sim_hits = len(context_data.get("simulation", []))
+            kw_hits  = len(context_data.get("keywords", []))
             print(
                 f"  {_GREEN}Semantic context: "
-                f"{kpi_hits} KPI, {qb_hits} Q&A, {sim_hits} scenario(s){_RESET}"
+                f"{kpi_hits} KPI, {qb_hits} Q&A, {sim_hits} scenario(s), {kw_hits} keyword(s){_RESET}"
             )
         else:
             print(f"  {_DIM}No semantic context (API may be unreachable).{_RESET}")

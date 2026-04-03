@@ -18,6 +18,82 @@ from tools.python_sandbox import execute_python, PythonSandbox
 
 
 # ─────────────────────────────────────────────
+# GROUP BY dimension extraction
+# ─────────────────────────────────────────────
+
+_PYTHON_FUNC_KEYS = ("kpi_python_function", "map_python_function")
+
+
+def _extract_group_by_dimensions(python_function: str) -> dict | None:
+    """
+    Parse a kpi_python_function / map_python_function string to:
+    1. Extract the GROUP BY column list
+    2. Replace the GROUP BY line with a placeholder comment
+
+    Returns dict with extracted info, or None if no GROUP BY found.
+    """
+    if not python_function or not isinstance(python_function, str):
+        return None
+
+    pattern = r'(GROUP\s+BY\s+)([\w\s,\.]+?)(\s*(?:\n|"""|\'\'\'|\)|$))'
+    match = re.search(pattern, python_function, re.IGNORECASE)
+    if not match:
+        return None
+
+    raw_columns = match.group(2)
+    dimensions = [col.strip() for col in raw_columns.split(",") if col.strip()]
+    if not dimensions:
+        return None
+
+    placeholder = "-- GROUP BY: <SELECT from available_dimensions based on your query granularity>"
+    modified_function = (
+        python_function[:match.start()]
+        + placeholder
+        + python_function[match.end():]
+    )
+
+    return {
+        "available_dimensions": dimensions,
+        "modified_function": modified_function,
+    }
+
+
+def _process_python_functions(result: dict) -> dict:
+    """
+    For any dict containing kpi_python_function or map_python_function,
+    extract GROUP BY dimensions, replace the clause with a placeholder,
+    and add a ⚠️_GROUP_BY_DECISION field so the traversal agent picks
+    the right granularity instead of blindly copying the full GROUP BY.
+    """
+    all_dimensions: list[str] = []
+    for key in _PYTHON_FUNC_KEYS:
+        func_str = result.get(key)
+        if not func_str:
+            continue
+        extracted = _extract_group_by_dimensions(func_str)
+        if extracted:
+            result[key] = extracted["modified_function"]
+            all_dimensions.extend(extracted["available_dimensions"])
+
+    if all_dimensions:
+        # Deduplicate while preserving order
+        seen = set()
+        unique = []
+        for d in all_dimensions:
+            if d not in seen:
+                seen.add(d)
+                unique.append(d)
+        result["⚠️_GROUP_BY_DECISION"] = {
+            "available_dimensions": unique,
+            "instruction": (
+                "Do NOT use all dimensions. SELECT only the ones your "
+                "sub-query needs. See STEP 2a in your system prompt."
+            ),
+        }
+    return result
+
+
+# ─────────────────────────────────────────────
 # Per-tool character limits (context overflow defense)
 # ─────────────────────────────────────────────
 
@@ -132,11 +208,12 @@ def get_node(node_id: str) -> str:
     """Fetch a single BKGNode from the Knowledge Graph by its node_id.
     Returns all properties plus incoming and outgoing relationships.
     Supports aliases like 'GC' for general_contractor, 'NAS' for nas_session, etc.
-    Large properties (map_python_function, map_contract, kpi_python_function, etc.)
-    are excluded — use get_kpi to fetch KPI details explicitly.
+    If the node has a map_python_function, its GROUP BY is replaced with a
+    placeholder — check available_dimensions to choose the right granularity.
     Use this when you know the exact node you want to inspect.
     """
     result = _get_bkg().query({"mode": "get_node", "node_id": node_id})
+    result = _process_python_functions(result)
     return _truncate_tool_output("get_node", json.dumps(result, default=str))
 
 
@@ -175,10 +252,13 @@ def get_kpi(node_id: str) -> str:
     """Get detailed information about a KPI node including its definition,
     formula description, business logic, Python function, source tables/columns,
     dimensions, filters, output schema, and related core nodes.
+    The python function's GROUP BY is replaced with a placeholder — check
+    available_dimensions to choose the right granularity for your query.
     Use this when you need to understand how a KPI metric is computed or what drives it.
     If called on a non-KPI node, returns KPIs that reference that node.
     """
     result = _get_bkg().query({"mode": "get_kpi", "node_id": node_id})
+    result = _process_python_functions(result)
     return _truncate_tool_output("get_kpi", json.dumps(result, default=str))
 
 

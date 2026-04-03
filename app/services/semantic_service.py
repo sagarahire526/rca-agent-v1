@@ -1,17 +1,20 @@
 """
 Semantic search service — calls the internal PM Copilot semantic search API
-to retrieve relevant context from KPI, question_bank, and simulation tables.
+to retrieve relevant context from KPI, question_bank, simulation, and keywords tables.
 
-API endpoint: POST /api/v1/semantic/search
+API endpoints:
+    POST /api/v1/semantic/search           — kpi, question_bank, simulation
+    POST /api/v1/semantic/keywords/search  — keywords
+
 Note: Only accessible within the company network.
 
 Request body:
     { "query": str, "table": "kpi"|"question_bank"|"simulation", "top_k": int }
+    { "query": str, "top_k": int }  (keywords)
 
 Response (200):
     {
         "query": str,
-        "total_results": int,
         "results": [
             { "table": str, "id": int, "content": {...}, "similarity_score": float }
         ]
@@ -97,6 +100,40 @@ class SemanticService:
 
         return []
 
+    def _search_keywords(self, query: str, top_k: int = _DEFAULT_TOP_K) -> list[dict]:
+        """
+        Call the keywords semantic search API (separate endpoint).
+        Returns an empty list on any error.
+        """
+        url = f"{self._base_url}/api/v1/semantic/keywords/search"
+        payload = {"query": query, "top_k": top_k}
+
+        try:
+            resp = self._session.post(url, json=payload, timeout=_REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            results: list[dict] = resp.json().get("results", [])
+            logger.info(
+                "Semantic search [keywords]: %d result(s) for query: %.80s",
+                len(results), query,
+            )
+            return results
+
+        except requests.exceptions.ConnectionError:
+            logger.warning(
+                "Semantic search [keywords]: Cannot reach %s — are you on the company network?",
+                self._base_url,
+            )
+        except requests.exceptions.Timeout:
+            logger.warning(
+                "Semantic search [keywords]: Request timed out after %ds", _REQUEST_TIMEOUT
+            )
+        except requests.exceptions.HTTPError as exc:
+            logger.warning("Semantic search [keywords]: HTTP error — %s", exc)
+        except Exception as exc:
+            logger.warning("Semantic search [keywords]: Unexpected error — %s", exc)
+
+        return []
+
     # ── High-level: query all tables ───────────────────────────────────────
 
     def get_all_context(
@@ -105,22 +142,24 @@ class SemanticService:
         top_k: int = _DEFAULT_TOP_K,
     ) -> dict[str, list[dict]]:
         """
-        Query kpi, question_bank, and simulation tables concurrently.
+        Query kpi, question_bank, simulation, and keywords tables concurrently.
 
         Returns:
             {
                 "kpi":           [...],
                 "question_bank": [...],
                 "simulation":    [...],
+                "keywords":      [...],
             }
         Each list contains result dicts from the API (may be empty on error).
         """
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=len(_TABLES)) as executor:
+        with ThreadPoolExecutor(max_workers=len(_TABLES) + 1) as executor:
             futures = {
                 table: executor.submit(self._search, query, table, top_k)
                 for table in _TABLES
             }
+            futures["keywords"] = executor.submit(self._search_keywords, query, top_k)
         return {table: fut.result() for table, fut in futures.items()}
 
     # ── Context formatting ─────────────────────────────────────────────────
@@ -136,8 +175,9 @@ class SemanticService:
         kpi_results = context.get("kpi", [])
         qb_results  = context.get("question_bank", [])
         sim_results = context.get("simulation", [])
+        kw_results  = context.get("keywords", [])
 
-        if not any([kpi_results, qb_results, sim_results]):
+        if not any([kpi_results, qb_results, sim_results, kw_results]):
             return ""
 
         lines: list[str] = [
@@ -210,6 +250,29 @@ class SemanticService:
                     if k not in rendered and v:
                         lines.append(f"  **{k}**: {v}")
 
+                lines.append("")
+
+        # ── Keywords section ──
+        if kw_results:
+            lines.append("### Relevant Keywords")
+            lines.append(
+                "These domain keywords match the user's query. "
+                "Use their mapped table columns and logic to guide data retrieval."
+            )
+            lines.append("")
+            for r in kw_results:
+                score = f"{r.get('similarity_score', 0) * 100:.1f}%"
+                content: dict[str, Any] = r.get("content") or {}
+                kw_name = content.get("keyword_name", f"#{r.get('id', '?')}")
+                lines.append(f"**{kw_name}** (similarity: {score})")
+                if content.get("keyword_description"):
+                    lines.append(f"  - **Description**: {content['keyword_description']}")
+                if content.get("mapped_table_columns"):
+                    lines.append(f"  - **Mapped Tables/Columns**: {content['mapped_table_columns']}")
+                if content.get("logic"):
+                    lines.append(f"  - **Logic**: {content['logic']}")
+                if content.get("synonyms"):
+                    lines.append(f"  - **Synonyms**: {content['synonyms']}")
                 lines.append("")
 
         lines.append("─" * 60)
