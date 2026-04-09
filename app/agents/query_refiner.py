@@ -28,6 +28,7 @@ from langgraph.types import interrupt
 
 from models.state import RCAState
 from services.llm_provider import LLMProvider
+from services.entity_lookup_service import get_all_entity_lookups
 from prompts.query_refiner_prompt import QUERY_REFINER_SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -88,8 +89,18 @@ def query_refiner_node(state: RCAState) -> dict[str, Any]:
 
     llm = LLMProvider(model="gpt-4o-mini").get_llm()
 
+    # ── Fetch entity lookups and inject into prompt ──
+    lookups = get_all_entity_lookups()
+    system_prompt = QUERY_REFINER_SYSTEM.replace(
+        "{{gc_names}}", ", ".join(lookups["gc_names"]) or "(not available)"
+    ).replace(
+        "{{market_names}}", ", ".join(lookups["markets"]) or "(not available)"
+    ).replace(
+        "{{region_names}}", ", ".join(lookups["regions"]) or "(not available)"
+    )
+
     response = llm.invoke([
-        SystemMessage(content=QUERY_REFINER_SYSTEM),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=user_query),
     ])
 
@@ -142,10 +153,19 @@ def query_refiner_node(state: RCAState) -> dict[str, Any]:
 
     # ── Graph resumed with user's clarification ──
     if user_clarification and user_clarification.strip():
-        refined_query = (
+        print(f"  {_GREEN}OK Clarification received — re-invoking LLM to resolve entities.{_RESET}", flush=True)
+
+        combined_query = (
             f"{user_query} — Additional context: {user_clarification.strip()}"
         )
-        print(f"  {_GREEN}OK Clarification received. Refined query:{_RESET}", flush=True)
+        resume_response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=combined_query),
+        ])
+        resume_parsed = _parse_refiner_response(resume_response.content)
+        refined_query = resume_parsed.get("refined_query", combined_query) or combined_query
+
+        print(f"  {_GREEN}Refined query after clarification:{_RESET}", flush=True)
         print(f"     {refined_query}\n", flush=True)
     else:
         refined_query = refined_query or user_query

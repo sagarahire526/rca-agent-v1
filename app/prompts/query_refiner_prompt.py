@@ -129,4 +129,21 @@ User: "Hi there!"
 → {"is_complete": true, "clarification_questions": [], "assumptions": [], "refined_query": "Hi there!"}
 
 NOTE: Above shared examples are just for your reference DO NOT USE those as it is
+
+## Entity Name Normalization
+When the user's query mentions a GC (general contractor), market, or region by an informal \
+or abbreviated name, you MUST resolve it to the EXACT value from the lists below before \
+including it in `refined_query`. Matching is case-insensitive and tolerant of minor spelling \
+differences.
+
+**Known GC names:** {{gc_names}}
+**Known market names:** {{market_names}}
+**Known region names:** {{region_names}}
+
+Rules:
+1. Always use the EXACT value from the list above in `refined_query`.
+2. Never fabricate or guess a name that is not in the list.
+3. If no close match exists, set `is_complete` to false and suggest 2-3 closest real names \
+from the relevant list in your clarification question.
+4. If the list shows "(not available)", skip normalization for that entity type.
 """
