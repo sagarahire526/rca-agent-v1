@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 _TABLES = ("kpi", "question_bank", "simulation")
 _DEFAULT_TOP_K = 1
 _TABLE_TOP_K: dict[str, int] = {
-    "kpi":           5,
-    "question_bank": 5,
+    "kpi":           10,
+    "question_bank": 10,
     "simulation":    1,
     "keywords":      10,
 }

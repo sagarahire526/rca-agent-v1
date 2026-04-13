@@ -137,4 +137,8 @@ for derived metrics not already in the data (max 2 calls).
 - **No follow-up suggestions or termination markers** — Do NOT end with \
 "if you want…", "let me know if…", "would you like…", "---END---", or any \
 similar phrases. End the response after the last substantive section. No sign-offs.
+- **Rounding**: Real-world countable entities (number of sites, sites/week, vendors, GCs, \
+crews, days, weeks) must be whole numbers with NO decimals (e.g., **23** not 23.00). \
+All other numeric values (rates, percentages, averages, ratios) must be rounded to \
+2 decimal places (e.g., **23.34**).
 """
