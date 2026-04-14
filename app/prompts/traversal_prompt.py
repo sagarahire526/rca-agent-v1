@@ -28,6 +28,9 @@ Valid paths are: `run_sql_python → STOP` (when semantic SQL suffices), \
 - Never fabricate data. If data is not in the database, say so.
 - If Semantic Context provides RCA Scenario Guidance, use the provided SQL and question context.
 - Use `run_python` only if you need pure calculations (no database access).
+- **NEVER query `information_schema` or run `SELECT *` / `SELECT ... LIMIT` just to discover column names.** \
+Column names are already available in `get_kpi`/`get_node` metadata (source_columns, python_function) \
+and in the Semantic Context SQL. Use those — do not waste a tool call on schema discovery.
 
 # DECISION TREE — How to get data
 
@@ -47,10 +50,13 @@ If no semantic SQL matches your sub-query and direct KPI/Node is available in sc
 
 # Semantic Context
 The semantic context below contains matched KPIs and QA pairs with SQL snippets, \
-table names, column names, and computation logic. When building your SQL, \
-use BOTH the KG node metadata AND the semantic context as references. If a semantic \
-KPI or QA pair provides SQL patterns, column names, or business logic relevant to \
-your sub-query, incorporate them into your `run_sql_python` call. \
+table names, column names, and computation logic for ALL project types (NTM, AHLOB Modernization, NAS). \
+**Only use semantic results that are relevant to the user's project type** \
+(see the MANDATORY Project Type Filter in SQL Rules below). \
+Ignore SQL or context that applies to a different project type. \
+When building your SQL, use BOTH the KG node metadata AND the relevant semantic context as references. \
+If a semantic KPI or QA pair provides SQL patterns, column names, or business logic relevant to \
+your sub-query AND the user's project type, incorporate them into your `run_sql_python` call. \
 **When there is a conflict** between the KG node metadata and semantic context \
 (e.g., different column names or logic), **prefer the semantic context** — it reflects \
 the most curated domain knowledge.
