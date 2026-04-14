@@ -116,7 +116,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         total_hits = sum(len(v) for v in context_data.values())
         if total_hits:
             semantic_context = semantic.format_traversal_context(context_data)
-            rca_guidance = semantic.format_simulation_guidance(context_data)
+            rca_guidance = semantic.format_rca_guidance(context_data)
             kpi_hits = len(context_data.get("kpi", []))
             qb_hits  = len(context_data.get("question_bank", []))
             sim_hits = len(context_data.get("simulation", []))

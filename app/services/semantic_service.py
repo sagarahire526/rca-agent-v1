@@ -1,15 +1,15 @@
 """
 Semantic search service — calls the internal PM Copilot semantic search API
-to retrieve relevant context from KPI, question_bank, simulation, and keywords tables.
+to retrieve relevant context from KPI, question_bank, rca, and keywords tables.
 
 API endpoints:
-    POST /api/v1/semantic/search           — kpi, question_bank, simulation
+    POST /api/v1/semantic/search           — kpi, question_bank, rca
     POST /api/v1/semantic/keywords/search  — keywords
 
 Note: Only accessible within the company network.
 
 Request body:
-    { "query": str, "table": "kpi"|"question_bank"|"simulation", "top_k": int }
+    { "query": str, "table": "kpi"|"question_bank"|"rca", "top_k": int }
     { "query": str, "top_k": int }  (keywords)
 
 Response (200):
@@ -31,24 +31,21 @@ import config
 
 logger = logging.getLogger(__name__)
 
-_TABLES = ("kpi", "question_bank", "simulation")
+_TABLES = ("kpi", "question_bank", "rca")
 _DEFAULT_TOP_K = 1
 _TABLE_TOP_K: dict[str, int] = {
     "kpi":           10,
     "question_bank": 10,
-    "simulation":    1,
+    "rca":           1,
     "keywords":      10,
 }
 _REQUEST_TIMEOUT = 15  # seconds
 
-# Known structured keys inside the simulation table's content dict
-_SIMULATION_CONTENT_KEYS: dict[str, str] = {
-    "scenario":                "Scenario Description",
-    "data_phase_questions":    "Data Phase Questions",
-    "data_phase_steps":        "Data Phase Steps",
-    "calculation_phase_steps": "Calculation Phase Steps",
-    "simulator_phase_steps":   "Simulator Phase Steps",
-    "simulation_methodology":  "Simulation Methodology",
+# Known structured keys inside the rca table's content dict
+_RCA_CONTENT_KEYS: dict[str, str] = {
+    "question_id": "Question ID",
+    "question":    "Question",
+    "sql":         "SQL",
 }
 
 
@@ -56,7 +53,7 @@ class SemanticService:
     """
     Client for the internal PM Copilot semantic search API.
 
-    Queries kpi, question_bank, and simulation tables and formats
+    Queries kpi, question_bank, and rca tables and formats
     the results as structured context strings for the traversal and
     response agents. Gracefully degrades when the API is unreachable
     (e.g., outside the company network).
@@ -148,13 +145,13 @@ class SemanticService:
         top_k: int = _DEFAULT_TOP_K,
     ) -> dict[str, list[dict]]:
         """
-        Query kpi, question_bank, simulation, and keywords tables concurrently.
+        Query kpi, question_bank, rca, and keywords tables concurrently.
 
         Returns:
             {
                 "kpi":           [...],
                 "question_bank": [...],
-                "simulation":    [...],
+                "rca":           [...],
                 "keywords":      [...],
             }
         Each list contains result dicts from the API (may be empty on error).
@@ -179,12 +176,12 @@ class SemanticService:
         Format all semantic search results into a structured context block
         to be injected into the Traversal Agent's system prompt.
 
-        Sections: KPI context → Question Bank examples → Simulation scenarios.
+        Sections: KPI context → Question Bank examples → RCA scenarios.
         Returns an empty string when no results are available.
         """
         kpi_results = context.get("kpi", [])
         qb_results  = context.get("question_bank", [])
-        sim_results = context.get("simulation", [])
+        sim_results = context.get("rca", [])
         kw_results  = context.get("keywords", [])
 
         if not any([kpi_results, qb_results, sim_results, kw_results]):
@@ -224,29 +221,27 @@ class SemanticService:
                         lines.append(f"  - **{k}**: {v}")
                 lines.append("")
 
-        # ── Simulation Scenario section ──
+        # ── RCA section ──
         if sim_results:
-            lines.append("### Matched Simulation Scenarios")
+            lines.append("### Matched RCA Scenarios")
             lines.append(
-                "These pre-defined scenarios closely match the query. "
-                "Follow the Data Phase Questions/Steps as your primary retrieval roadmap "
-                "before exploring freely."
+                "These pre-defined RCA questions closely match the query. "
+                "Use the associated SQL and question context to guide your "
+                "data retrieval strategy."
             )
             lines.append("")
             for i, r in enumerate(sim_results, 1):
                 score = f"{r.get('similarity_score', 0) * 100:.1f}%"
-                lines.append(
-                    f"**Scenario {i} — ID {r.get('id', '?')}** (similarity: {score})"
-                )
                 content: dict[str, Any] = r.get("content") or {}
-                rendered: set[str] = set()
-
-                # Render known structured keys in a logical order
-                for key, label in _SIMULATION_CONTENT_KEYS.items():
+                q_id = content.get("question_id", r.get("id", "?"))
+                lines.append(
+                    f"**RCA {i} — Question ID {q_id}** (similarity: {score})"
+                )
+                # Only render question_id, question, and sql
+                for key, label in _RCA_CONTENT_KEYS.items():
                     val = content.get(key)
                     if not val:
                         continue
-                    rendered.add(key)
                     if isinstance(val, list):
                         lines.append(f"  **{label}**:")
                         for item in val:
@@ -254,11 +249,6 @@ class SemanticService:
                                 lines.append(f"    - {item}")
                     else:
                         lines.append(f"  **{label}**: {val}")
-
-                # Any remaining keys not in the known set
-                for k, v in content.items():
-                    if k not in rendered and v:
-                        lines.append(f"  **{k}**: {v}")
 
                 lines.append("")
 
@@ -288,50 +278,40 @@ class SemanticService:
         lines.append("─" * 60)
         return "\n".join(lines)
 
-    def format_simulation_guidance(self, context: dict[str, list[dict]]) -> str:
+    def format_rca_guidance(self, context: dict[str, list[dict]]) -> str:
         """
-        Extract simulation guidance (calculation steps, simulator steps, methodology)
-        from the best-matched simulation scenario result.
+        Extract RCA guidance (question and SQL) from the best-matched
+        RCA result.
 
         This is passed to the Response Agent so it knows how to structure
         calculations and the final output. Returns empty string if no match.
         """
-        sim_results = context.get("simulation", [])
-        if not sim_results:
+        rca_results = context.get("rca", [])
+        if not rca_results:
             return ""
 
-        best    = sim_results[0]  # highest similarity
+        best    = rca_results[0]  # highest similarity
         content = best.get("content") or {}
         score   = f"{best.get('similarity_score', 0) * 100:.1f}%"
+        q_id    = content.get("question_id", best.get("id", "?"))
 
         lines: list[str] = [
-            "## Matched Scenario — Simulation Guidance (Reference Only)",
-            f"*Scenario ID {best.get('id', '?')} · Similarity {score}*",
-            f"*Scenario: {content.get('scenario', 'N/A')}*",
+            "## Matched RCA — Guidance (Reference Only)",
+            f"*Question ID {q_id} · Similarity {score}*",
             "",
         ]
 
-        calc_steps: list = content.get("calculation_phase_steps", [])
-        if calc_steps:
-            lines.append("### Calculation Phase Steps")
+        question: str = content.get("question", "")
+        if question:
+            lines.append(f"### Question")
+            lines.append(question)
+            lines.append("")
+
+        sql: str = content.get("sql", "")
+        if sql:
+            lines.append("### SQL")
             lines.append("*(Adapt to what was actually retrieved)*")
-            for step in calc_steps:
-                if str(step).strip():
-                    lines.append(f"- {step}")
-            lines.append("")
-
-        sim_steps: list = content.get("simulator_phase_steps", [])
-        if sim_steps:
-            lines.append("### Simulator Phase Steps")
-            for step in sim_steps:
-                if str(step).strip():
-                    lines.append(f"- {step}")
-            lines.append("")
-
-        methodology: str = content.get("simulation_methodology", "")
-        if methodology:
-            lines.append("### Expected Output Methodology")
-            lines.append(methodology)
+            lines.append(f"```sql\n{sql}\n```")
             lines.append("")
 
         return "\n".join(lines)
