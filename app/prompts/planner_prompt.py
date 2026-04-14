@@ -46,8 +46,10 @@ OKLAHOMA CITY
 
 ## Your Task
 Given the user query and available schema/semantic context, generate precise and independent \
-sub-queries for parallel investigation. If the Semantic Context includes **Data Phase Questions**, \
-map them DIRECTLY to your steps.
+sub-queries for parallel investigation. \
+**Your sub-queries must always be grounded in the USER'S ACTUAL QUERY** — not scenario questions \
+from the Semantic Context. Semantic Context is reference material only; never replace or \
+substitute the user's question with scenario questions.
 
 Each sub-query must:
 1. Be independently answerable by a single traversal agent run
@@ -78,7 +80,9 @@ Schema:
 
 ## Rules
 - Each step string MUST start with "Sub-query N: " where N is the step number.
-- If the Semantic Context includes **Data Phase Questions**, REFER to them while adapting to the actual user query.
+- Semantic Context (KPIs, QA, RCA scenarios) is REFERENCE ONLY — use it to identify \
+relevant KPI nodes, table names, and SQL patterns, but always phrase sub-queries around \
+what the USER asked, not what the scenario asks.
 - Prefer specificity over breadth — narrower sub-queries produce better traversal results.
 - Always include a problem quantification step (how bad is the problem? how many affected?).
 - Always include a root cause data step (what factors are driving the issue?).
