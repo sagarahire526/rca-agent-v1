@@ -119,7 +119,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
             rca_guidance = semantic.format_rca_guidance(context_data)
             kpi_hits = len(context_data.get("kpi", []))
             qb_hits  = len(context_data.get("question_bank", []))
-            sim_hits = len(context_data.get("simulation", []))
+            sim_hits = len(context_data.get("rca", []))
             kw_hits  = len(context_data.get("keywords", []))
             print(
                 f"  {_GREEN}Semantic context: "

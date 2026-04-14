@@ -241,7 +241,7 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
 
             kpi_hits = len(context_data.get("kpi", []))
             qb_hits  = len(context_data.get("question_bank", []))
-            sim_hits = len(context_data.get("simulation", []))
+            sim_hits = len(context_data.get("rca", []))
             kw_hits  = len(context_data.get("keywords", []))
             total    = kpi_hits + qb_hits + sim_hits + kw_hits
 
