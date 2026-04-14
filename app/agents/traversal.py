@@ -222,7 +222,7 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
     """
     warnings.filterwarnings("ignore", message=".*pandas only supports SQLAlchemy.*")
 
-    provider = LLMProvider(model="gpt-4o")
+    provider = LLMProvider(model="gpt-5-mini")
     llm = provider.get_llm()
 
     kg_schema = state.get("kg_schema", "Schema not available")
@@ -348,7 +348,7 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     """
     warnings.filterwarnings("ignore", message=".*pandas only supports SQLAlchemy.*")
 
-    provider = LLMProvider(model="gpt-4o")
+    provider = LLMProvider(model="gpt-5-mini")
     llm = provider.get_llm()
 
     kg_schema = state.get("kg_schema", "Schema not available")

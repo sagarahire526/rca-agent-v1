@@ -189,7 +189,7 @@ def response_node(state: RCAState) -> dict[str, Any]:
     Reads: refined_query (or user_query), traversal/planner data, errors
     Writes: final_response, calculations, data_summary, current_phase, messages
     """
-    provider = LLMProvider(model="gpt-4o", temperature=0.1)
+    provider = LLMProvider(model="gpt-5-mini", temperature=0.1)
     llm = provider.get_llm()
 
     user_query = state.get("refined_query") or state["user_query"]

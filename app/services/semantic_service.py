@@ -34,10 +34,10 @@ logger = logging.getLogger(__name__)
 _TABLES = ("kpi", "question_bank", "rca")
 _DEFAULT_TOP_K = 1
 _TABLE_TOP_K: dict[str, int] = {
-    "kpi":           10,
-    "question_bank": 10,
+    "kpi":           5,
+    "question_bank": 5,
     "rca":           1,
-    "keywords":      10,
+    "keywords":      5,
 }
 _REQUEST_TIMEOUT = 15  # seconds
 
@@ -208,10 +208,6 @@ class SemanticService:
         # ── Question Bank section ──
         if qb_results:
             lines.append("### Relevant Questions from Knowledge Base")
-            lines.append(
-                "These pre-answered questions are semantically similar to the user's query. "
-                "Use them to understand expected data shape and calculations."
-            )
             lines.append("")
             for r in qb_results:
                 score = f"{r.get('similarity_score', 0) * 100:.1f}%"
@@ -224,11 +220,6 @@ class SemanticService:
         # ── RCA section ──
         if sim_results:
             lines.append("### Matched RCA Scenarios")
-            lines.append(
-                "These pre-defined RCA questions closely match the query. "
-                "Use the associated SQL and question context to guide your "
-                "data retrieval strategy."
-            )
             lines.append("")
             for i, r in enumerate(sim_results, 1):
                 score = f"{r.get('similarity_score', 0) * 100:.1f}%"
@@ -255,10 +246,6 @@ class SemanticService:
         # ── Keywords section ──
         if kw_results:
             lines.append("### Relevant Keywords")
-            lines.append(
-                "These domain keywords match the user's query. "
-                "Use their mapped table columns and logic to guide data retrieval."
-            )
             lines.append("")
             for r in kw_results:
                 score = f"{r.get('similarity_score', 0) * 100:.1f}%"

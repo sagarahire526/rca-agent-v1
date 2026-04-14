@@ -65,45 +65,18 @@ class Neo4jTool:
         logger.debug("Fetched %d BKGNode instances", len(records))
         return records
 
-    def get_schema(self, relevant_ids: set[str] | None = None) -> str:
+    def get_schema(self) -> str:
         """
-        Discover the KG schema with optional two-tier filtering.
+        Discover the KG schema — optimised for minimal token usage.
 
-        If relevant_ids is provided:
-          Tier 1 — Relevant nodes: full definitions + relationships between them
-          Tier 2 — Other nodes: compact [type] label (node_id) only
-        If relevant_ids is None: returns full unfiltered schema (original behavior).
+        Omits raw property listings and relationship type metadata
+        (the agent gets those from get_kpi / get_node calls).
+        Deduplicates and groups relationships by source node.
         """
         db = config.neo4j.database
 
         with self.driver.session(database=db) as session:
-            # ── 1. Node labels + property names/types ──
-            node_info = session.run(
-                "CALL db.schema.nodeTypeProperties() "
-                "YIELD nodeType, propertyName, propertyTypes, mandatory "
-                "RETURN nodeType, "
-                "  collect({name: propertyName, types: propertyTypes, mandatory: mandatory}) "
-                "  AS properties"
-            ).data()
-
-            # ── 2. Relationship types + property names/types ──
-            rel_info = session.run(
-                "CALL db.schema.relTypeProperties() "
-                "YIELD relType, propertyName, propertyTypes, mandatory "
-                "RETURN relType, "
-                "  collect({name: propertyName, types: propertyTypes, mandatory: mandatory}) "
-                "  AS properties"
-            ).data()
-
-            # ── 3. Relationship type patterns (meta-level) ──
-            rel_patterns = session.run(
-                "MATCH (a)-[r]->(b) "
-                "WITH labels(a) AS srcLabels, type(r) AS relType, labels(b) AS tgtLabels "
-                "RETURN DISTINCT srcLabels, relType, tgtLabels "
-                "ORDER BY relType"
-            ).data()
-
-            # ── 4. All BKGNode instances with definitions ──
+            # ── 1. All BKGNode instances with definitions ──
             node_instances = session.run(
                 "MATCH (n:BKGNode) "
                 "RETURN n.entity_type AS entity_type, "
@@ -113,116 +86,48 @@ class Neo4jTool:
                 "ORDER BY n.entity_type, n.node_id"
             ).data()
 
-            # ── 5. Actual relationship map between nodes ──
+            # ── 2. Actual relationship map between nodes ──
             node_relationships = session.run(
                 "MATCH (a:BKGNode)-[r:RELATES_TO]->(b:BKGNode) "
-                "RETURN a.node_id AS source, "
+                "RETURN DISTINCT a.node_id AS source, "
                 "       r.relationship_type AS rel_type, "
                 "       b.node_id AS target "
-                "ORDER BY a.entity_type, a.node_id"
+                "ORDER BY source"
             ).data()
 
         # ── Build formatted output ──
         schema_lines = ["=== KNOWLEDGE GRAPH SCHEMA ===\n"]
 
-        # -- Node Labels & Properties --
-        schema_lines.append("── Node Labels & Properties ──")
-        for row in node_info:
-            node_type = row["nodeType"]
-            props_list = []
-            for p in row["properties"]:
-                if not p["name"]:
-                    continue
-                types_str = "/".join(p["types"]) if p["types"] else "Unknown"
-                req = " (required)" if p.get("mandatory") else ""
-                props_list.append(f"{p['name']}: {types_str}{req}")
-            schema_lines.append(f"  {node_type}")
-            for prop in props_list:
-                schema_lines.append(f"    - {prop}")
-            if not props_list:
-                schema_lines.append("    (no properties)")
+        # -- BKG Nodes by entity type --
+        schema_lines.append("── BKG Nodes (by entity type) ──")
+        current_type = None
+        for row in node_instances:
+            et = row.get("entity_type", "unknown")
+            if et != current_type:
+                current_type = et
+                schema_lines.append(f"\n  [{et}]")
+            label_str = f" — {row['label']}" if row.get("label") else ""
+            def_str = f" : {row['definition']}" if row.get("definition") else ""
+            schema_lines.append(f"    • {row['node_id']}{label_str}{def_str}")
 
-        # -- Relationship Types & Properties --
-        schema_lines.append("\n── Relationship Types & Properties ──")
-        for row in rel_info:
-            rel_type = row["relType"]
-            props_list = []
-            for p in row["properties"]:
-                if not p["name"]:
-                    continue
-                types_str = "/".join(p["types"]) if p["types"] else "Unknown"
-                req = " (required)" if p.get("mandatory") else ""
-                props_list.append(f"{p['name']}: {types_str}{req}")
-            schema_lines.append(f"  {rel_type}")
-            for prop in props_list:
-                schema_lines.append(f"    - {prop}")
-            if not props_list:
-                schema_lines.append("    (no properties)")
+        # -- Deduplicated & grouped relationships --
+        # Group: (source, rel_type) → set of targets
+        from collections import defaultdict
+        grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
+        seen: set[tuple[str, str, str]] = set()
+        for row in node_relationships:
+            key = (row["source"], row.get("rel_type") or "RELATES_TO", row["target"])
+            if key not in seen:
+                seen.add(key)
+                grouped[(key[0], key[1])].append(key[2])
 
-        # -- Relationship Patterns (meta-level) --
-        schema_lines.append("\n── Relationship Patterns ──")
-        for row in rel_patterns:
-            src = ":".join(row["srcLabels"])
-            tgt = ":".join(row["tgtLabels"])
-            schema_lines.append(f"  (:{src})-[:{row['relType']}]->(:{tgt})")
+        schema_lines.append("\n── Node Relationships ──")
+        for (source, rel_type), targets in grouped.items():
+            schema_lines.append(
+                f"  ({source}) —[{rel_type}]→ {', '.join(targets)}"
+            )
 
-        # ── Two-tier BKG Nodes ──
-        if relevant_ids:
-            # Tier 1: Relevant nodes — full detail with definitions
-            schema_lines.append("\n── Tier 1: Relevant BKG Nodes (full detail) ──")
-            current_type = None
-            for row in node_instances:
-                if row["node_id"] not in relevant_ids:
-                    continue
-                et = row.get("entity_type", "unknown")
-                if et != current_type:
-                    current_type = et
-                    schema_lines.append(f"\n  [{et}]")
-                label_str = f" — {row['label']}" if row.get("label") else ""
-                def_str = f"\n      Definition: {row['definition']}" if row.get("definition") else ""
-                schema_lines.append(f"    • {row['node_id']}{label_str}{def_str}")
-
-            # Tier 1 relationships: only between relevant nodes
-            schema_lines.append("\n── Tier 1: Relationships (between relevant nodes) ──")
-            for row in node_relationships:
-                if row["source"] in relevant_ids or row["target"] in relevant_ids:
-                    rel = row.get("rel_type") or "RELATES_TO"
-                    schema_lines.append(
-                        f"  ({row['source']}) —[{rel}]→ ({row['target']})"
-                    )
-
-            # Tier 2: Other nodes — compact listing
-            schema_lines.append("\n── Tier 2: Other BKG Nodes (compact — use get_node()/find_relevant() for details) ──")
-            current_type = None
-            for row in node_instances:
-                if row["node_id"] in relevant_ids:
-                    continue
-                et = row.get("entity_type", "unknown")
-                if et != current_type:
-                    current_type = et
-                    schema_lines.append(f"\n  [{et}]")
-                label_str = row.get("label") or row["node_id"]
-                schema_lines.append(f"    [{et}] {label_str} ({row['node_id']})")
-        else:
-            # No filtering — original full schema
-            schema_lines.append("\n── BKG Nodes (by entity type) ──")
-            current_type = None
-            for row in node_instances:
-                et = row.get("entity_type", "unknown")
-                if et != current_type:
-                    current_type = et
-                    schema_lines.append(f"\n  [{et}]")
-                label_str = f" — {row['label']}" if row.get("label") else ""
-                schema_lines.append(f"    • {row['node_id']}{label_str}")
-
-            schema_lines.append("\n── Node Relationships ──")
-            for row in node_relationships:
-                rel = row.get("rel_type") or "RELATES_TO"
-                schema_lines.append(
-                    f"  ({row['source']}) —[{rel}]→ ({row['target']})"
-                )
-
-        logger.debug("Schema discovery complete: %d lines (filtered=%s)", len(schema_lines), relevant_ids is not None)
+        logger.debug("Schema discovery complete: %d lines", len(schema_lines))
         return "\n".join(schema_lines)
 
     # ─────────────────────────────────────────────
