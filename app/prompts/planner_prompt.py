@@ -52,7 +52,9 @@ from the Semantic Context. Semantic Context is reference material only; never re
 substitute the user's question with scenario questions.
 
 Each sub-query must:
-1. Be independently answerable by a single traversal agent run
+1. Be **fully self-contained** — answerable by a single traversal agent with NO context from \
+other steps. Steps run in parallel on independent threads and cannot see each other's results. \
+NEVER write "for the GCs from step 1", "using step 2 results", or any cross-step reference.
 2. Target a specific investigation dimension
 3. Be concrete — name the specific KPI node, entity, region, or relationship to investigate
 4. Be non-overlapping — never investigate the same thing twice

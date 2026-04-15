@@ -90,7 +90,10 @@ OKLAHOMA CITY
 
 # SQL Rules
 1. **Schema prefix**: ALWAYS `pwc_macro_staging_schema.<table_name>` 
-2. **No guessing**: Get table/column names from semantic context SQL, `get_kpi`, or `get_node` output.
+2. **No guessing**: Get table/column names from semantic context SQL, `get_kpi`, or `get_node` output. \
+**Columns are table-specific** — a column from one semantic result's SQL belongs ONLY to that \
+result's table. NEVER use a column from table A in a query against table B. When the semantic \
+context shows multiple results with different tables, carefully match each column to its own table.
 3. **Use `execute_query(sql)`**: Pre-injected helper returning `list[dict]`. Do NOT redefine it.
 4. **Date columns**: Always `pd.to_datetime(df['col'], errors='coerce')` before arithmetic.
 5. **Discover before filtering**: Run `SELECT DISTINCT column_name FROM table` before hardcoding category values.
