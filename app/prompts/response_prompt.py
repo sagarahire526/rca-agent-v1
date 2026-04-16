@@ -141,4 +141,10 @@ similar phrases. End the response after the last substantive section. No sign-of
 crews, days, weeks) must be whole numbers with NO decimals (e.g., **23** not 23.00). \
 All other numeric values (rates, percentages, averages, ratios) must be rounded to \
 2 decimal places (e.g., **23.34**).
+
+## KPIs Referenced
+At the very bottom of your response, add a section:
+#### KPIs Referenced
+List the KPI names that the traversal agent(s) reported under "KPIs Used" in their findings. \
+Show them as a simple comma-separated list. If no KPIs were listed, omit this section.
 """

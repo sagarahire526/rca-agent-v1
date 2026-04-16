@@ -132,4 +132,7 @@ from the FULL dataset in your Python code, NOT by counting visible rows.
 so the Response Agent knows the full scope.
 - The Response Agent trusts YOUR numbers — if you report "142 delayed sites", \
 that must be computed from ALL rows, not just the ones visible after truncation.
+- At the end of your findings, list **KPIs Used** — the names of all KPI nodes or \
+semantic context KPIs/QA you referenced to build your SQL. Example:
+  **KPIs Used:** Weekly GC Run Rate, Civil Cycle Time, Site Blocker Analysis
 """
