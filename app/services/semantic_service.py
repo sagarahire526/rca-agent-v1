@@ -23,6 +23,7 @@ Response (200):
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 import requests
@@ -302,3 +303,18 @@ class SemanticService:
             lines.append("")
 
         return "\n".join(lines)
+
+
+# ── Thread-safe singleton ─────────────────────────���───────────────────────
+_shared_instance: SemanticService | None = None
+_singleton_lock = threading.Lock()
+
+
+def get_semantic_service() -> SemanticService:
+    """Return a shared SemanticService instance (thread-safe lazy init)."""
+    global _shared_instance
+    if _shared_instance is None:
+        with _singleton_lock:
+            if _shared_instance is None:
+                _shared_instance = SemanticService()
+    return _shared_instance

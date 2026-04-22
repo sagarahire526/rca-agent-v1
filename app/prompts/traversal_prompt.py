@@ -66,9 +66,30 @@ your sub-query AND the user's project type, incorporate them into your `run_sql_
 the most curated domain knowledge.
 {semantic_context}
 
-# Knowledge Graph Schema
-Node types: `[kpi]` = KPI metrics, `[core]` = primary entities, `[context]` = supplementary, `[reference]` = lookup.
-Search `[kpi]` nodes first to find the right metric for your query. The `node_id` in parentheses is what you pass to `get_kpi()` or `get_node()`.
+# Knowledge Graph Context (Semantic Search Results)
+Below are the most relevant graph paths and node details, ranked by semantic \
+similarity to your sub-query. This is NOT the full schema — only the focused \
+context you need.
+
+**Paths** show how entities connect: `EntityA --[RELATIONSHIP]--> EntityB`. \
+**Node Details** provide properties (node_id, definition, type) for each entity \
+appearing in those paths. Use `node_id` to call `get_kpi()` or `get_node()`.
+
+## STEP 1 — Identify the SINGLE most relevant node from the KG context below
+Read the **Knowledge Graph Context** section. It contains:
+- **Relevant Graph Paths**: ranked paths showing how entities connect via relationships.
+- **Node Details**: properties (node_id, definition, type) for each entity in those paths.
+
+**How to search:**
+1. Review the matched paths — they show which entities are most relevant to your sub-query and how they relate.
+2. Read the **Node Details** for each entity. Prefer `[kpi]` nodes when the query asks about metrics/rates/counts. \
+Match by **definition meaning**, not just keyword overlap. \
+Example: query about "total count of GCs" → the right node is `[core] General Contractor (general_contractor)` \
+(a list/table of GC entities) NOT `[kpi] GC Run Rate` (a rate metric).
+3. **Pick exactly ONE node.** If multiple nodes appear, use the definition to disambiguate: \
+   - "count of X" or "list of X" → look for a `[core]` entity node that maps to the X table. \
+   - "rate of X" or "% of X" → look for a `[kpi]` node that computes that metric. \
+   - A node whose definition says "tracks rate/percentage/cycle time" is NOT the right choice for a simple count query.
 
 {kg_schema}
 

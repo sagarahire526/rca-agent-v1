@@ -20,7 +20,8 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from models.state import RCAState
 from services.llm_provider import LLMProvider
 from agents.traversal import atraversal_node
-from services.semantic_service import SemanticService
+from services.semantic_service import get_semantic_service
+from services.schema_embedding_service import search_schema
 from prompts.planner_prompt import PLANNER_SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,12 @@ def planner_node(state: RCAState) -> dict[str, Any]:
             rca_scenario_guidance, current_phase, messages
     """
     refined_query = state.get("refined_query") or state["user_query"]
-    kg_schema = state.get("kg_schema", "Schema not available")
+    table_list = state.get("kg_schema", "")  # discover_schema now stores table list only
+    try:
+        kg_schema = search_schema(refined_query, top_k=15) + table_list
+    except Exception as e:
+        logger.warning("Embedding schema search in planner failed (non-fatal): %s", e)
+        kg_schema = table_list or "Schema not available"
 
     print(f"\n{_BOLD}{'=' * 70}")
     print(f"  PLANNER AGENT — Decomposing RCA query into investigation steps")
@@ -110,7 +116,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     semantic_context = ""
     rca_guidance = ""
     try:
-        semantic = SemanticService()
+        semantic = get_semantic_service()
         context_data = semantic.get_all_context(refined_query)
 
         total_hits = sum(len(v) for v in context_data.values())

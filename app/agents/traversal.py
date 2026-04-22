@@ -20,7 +20,8 @@ from models.state import RCAState, ToolCallRecord
 from services.llm_provider import LLMProvider
 from tools.langchain_tools import get_fast_tools
 from prompts.traversal_prompt import TRAVERSAL_SYSTEM
-from services.semantic_service import SemanticService
+from services.semantic_service import get_semantic_service
+from services.schema_embedding_service import search_schema
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +226,16 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
     provider = LLMProvider(model="gpt-5-mini", temperature=0.0)
     llm = provider.get_llm()
 
-    kg_schema = state.get("kg_schema", "Schema not available")
+    # Use refined_query (includes HITL clarification) if available
+    traversal_query = state.get("refined_query") or state["user_query"]
+
+    # ── KG schema: per-query embedding search + static table list ─────────
+    table_list = state.get("kg_schema", "")  # discover_schema now stores table list only
+    try:
+        kg_schema = search_schema(traversal_query) + table_list
+    except Exception as e:
+        logger.warning("Embedding schema search failed (non-fatal): %s", e)
+        kg_schema = table_list or "Schema not available"
 
     # ── Semantic search ──
     semantic_context = ""
@@ -236,8 +246,8 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
         print(f"\n{_DIM}  Reusing planner semantic context (skipping API call){_RESET}")
     else:
         try:
-            semantic = SemanticService()
-            context_data = semantic.get_all_context(state["user_query"])
+            semantic = get_semantic_service()
+            context_data = semantic.get_all_context(traversal_query)
 
             kpi_hits = len(context_data.get("kpi", []))
             qb_hits  = len(context_data.get("question_bank", []))
@@ -351,7 +361,15 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     provider = LLMProvider(model="gpt-5-mini", temperature=0.0)
     llm = provider.get_llm()
 
-    kg_schema = state.get("kg_schema", "Schema not available")
+    # ── KG schema: per-sub-query embedding search + static table list ─────
+    sub_query = state["user_query"]
+    table_list = state.get("kg_schema", "")  # discover_schema now stores table list only
+    try:
+        kg_schema = search_schema(sub_query) + table_list
+    except Exception as e:
+        logger.warning("[async] Embedding schema search failed (non-fatal): %s", e)
+        kg_schema = table_list or "Schema not available"
+
     semantic_context = state.get("planner_semantic_context", "")
     rca_guidance = state.get("rca_scenario_guidance", "")
 
@@ -376,7 +394,7 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     tools = get_fast_tools(project_type=project_type)
     agent = create_react_agent(model=llm, tools=tools, prompt=system_prompt)
 
-    query = state["user_query"]
+    query = sub_query
 
     start_time = time.perf_counter()
     try:

@@ -17,8 +17,10 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from contextlib import contextmanager
 
 import psycopg2
+from psycopg2.pool import ThreadedConnectionPool
 
 import config
 
@@ -26,14 +28,19 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA = "pwc_agent_utility_schema"
 
+_pool: ThreadedConnectionPool | None = None
+
 
 # ─────────────────────────────────────────────
-# Internal helpers
+# Pool lifecycle (called from main.py lifespan)
 # ─────────────────────────────────────────────
 
-def _conn():
-    """Open a new read-write psycopg2 connection."""
-    return psycopg2.connect(
+def init_pool() -> None:
+    """Create the shared connection pool. Call once at startup."""
+    global _pool
+    _pool = ThreadedConnectionPool(
+        minconn=5,
+        maxconn=30,
         host=config.PG_HOST,
         port=config.PG_PORT,
         database=config.PG_DATABASE,
@@ -41,6 +48,36 @@ def _conn():
         password=config.PG_PASSWORD,
         connect_timeout=5,
     )
+    logger.info("PostgreSQL connection pool created (min=5, max=30)")
+
+
+def close_pool() -> None:
+    """Close all pooled connections. Call once at shutdown."""
+    global _pool
+    if _pool:
+        _pool.closeall()
+        _pool = None
+        logger.info("PostgreSQL connection pool closed")
+
+
+# ─────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────
+
+@contextmanager
+def _conn():
+    """Get a connection from the pool, auto-commit/rollback and return it."""
+    if _pool is None:
+        raise RuntimeError("Connection pool not initialized — call init_pool() first")
+    conn = _pool.getconn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        _pool.putconn(conn)
 
 
 def ensure_tables() -> None:

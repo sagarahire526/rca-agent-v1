@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Query
@@ -26,6 +27,8 @@ from api.v1.schemas import ProjectType
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analyze", tags=["SSE Stream"])
+
+_RCA_EXECUTOR = ThreadPoolExecutor(max_workers=50)
 
 
 class StreamResumeRequest(BaseModel):
@@ -150,7 +153,7 @@ async def stream_analyze(
     queue = sse_manager.register(query_id, loop)
 
     loop.run_in_executor(
-        None,
+        _RCA_EXECUTOR,
         _run_stream_thread,
         query, project_type.value, query_id, thread_id, user_id,
     )

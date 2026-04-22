@@ -1,9 +1,9 @@
 """
-Schema Discovery node — Discovers the Neo4j knowledge graph schema
-once at the start of each RCA investigation run.
+Schema Discovery node — Fetches the PostgreSQL table list only.
 
-Fetches the full unfiltered schema from Neo4j and appends the
-PostgreSQL table list.
+The full KG schema is no longer fetched here. Instead, each traversal
+agent performs a per-query embedding search via schema_embedding_service
+to get only the relevant nodes/paths for its specific sub-query.
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import logging
 from typing import Any
 
 from models.state import RCAState
-from tools.neo4j_tool import neo4j_tool
 from tools.bkg_tool import BKGTool
 
 logger = logging.getLogger(__name__)
@@ -62,27 +61,28 @@ def _fetch_table_list() -> str:
 
 def discover_schema_node(state: RCAState) -> dict[str, Any]:
     """
-    LangGraph node: Discover full KG schema (unfiltered) + PostgreSQL table list.
+    LangGraph node: Fetch PostgreSQL table list only.
+
+    The KG node/path context is now fetched per-query in the traversal
+    agent via embedding search (schema_embedding_service.search_schema).
     """
     try:
-        schema = neo4j_tool.get_schema()
         table_list = _fetch_table_list()
-        full_schema = schema + table_list
 
-        logger.info(f"Schema discovered: {len(full_schema)} chars (full, unfiltered)")
-        
+        logger.info(f"Schema discovery: table list fetched ({len(table_list)} chars)")
+
         return {
-            "kg_schema": full_schema,
+            "kg_schema": table_list,
             "current_phase": "traversal",
             "messages": [{
                 "agent": "schema_discovery",
-                "content": f"Knowledge graph schema discovered ({len(full_schema)} chars, full)",
+                "content": f"Table list fetched ({len(table_list)} chars). KG context will be fetched per-query via embeddings.",
             }],
         }
     except Exception as e:
         logger.error(f"Schema discovery failed: {e}")
         return {
-            "kg_schema": f"Schema discovery failed: {e}. Write generic Cypher queries.",
+            "kg_schema": "",
             "current_phase": "traversal",
             "errors": [f"Schema discovery error: {e}"],
             "messages": [{

@@ -38,8 +38,10 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    db_svc.init_pool()
     db_svc.ensure_tables()
     yield
+    db_svc.close_pool()
 
 
 app = FastAPI(
