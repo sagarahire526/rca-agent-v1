@@ -21,7 +21,7 @@ from models.state import RCAState
 from services.llm_provider import LLMProvider
 from agents.traversal import atraversal_node
 from services.semantic_service import get_semantic_service
-from services.schema_embedding_service import search_schema
+from tools.neo4j_tool import neo4j_tool
 from prompts.planner_prompt import PLANNER_SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -102,9 +102,10 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     refined_query = state.get("refined_query") or state["user_query"]
     table_list = state.get("kg_schema", "")  # discover_schema now stores table list only
     try:
-        kg_schema = search_schema(refined_query, top_k=15) + table_list
+        full_neo4j_schema = neo4j_tool.get_schema()
+        kg_schema = full_neo4j_schema + table_list
     except Exception as e:
-        logger.warning("Embedding schema search in planner failed (non-fatal): %s", e)
+        logger.warning("Neo4j schema fetch in planner failed (non-fatal): %s", e)
         kg_schema = table_list or "Schema not available"
 
     print(f"\n{_BOLD}{'=' * 70}")
@@ -115,6 +116,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     # ── Step 1: Fetch semantic context ──
     semantic_context = ""
     rca_guidance = ""
+    context_data: dict[str, list[dict]] = {}
     try:
         semantic = get_semantic_service()
         context_data = semantic.get_all_context(refined_query)
@@ -212,6 +214,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         "planner_step_results": step_results,
         "rca_scenario_guidance": rca_guidance,
         "planner_semantic_context": semantic_context,
+        "semantic_context_data": context_data,
         "current_phase": "response",
         "messages": [{
             "agent": "planner",

@@ -10,6 +10,7 @@ Handles two upstream paths:
 from __future__ import annotations
 
 import json
+import threading
 import time
 import logging
 from typing import Any
@@ -21,11 +22,49 @@ from models.state import RCAState
 from services.llm_provider import LLMProvider
 from tools.langchain_tools import get_analysis_tools
 from prompts.response_prompt import RESPONSE_SYSTEM
+from prompts.algorithm_prompt import ALGORITHM_SYSTEM
 
 
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_CALLS = 3
+
+
+def _unwrap_string_encoded_json(value: Any) -> Any:
+    """
+    Recursively walk a value and convert any string that is itself a JSON-encoded
+    object/array into the real parsed structure. Ensures the payload we send to
+    the response agent is valid JSON — never JSON enclosed in a string.
+    """
+    if isinstance(value, dict):
+        return {k: _unwrap_string_encoded_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unwrap_string_encoded_json(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")) and stripped.endswith(("}", "]")):
+            try:
+                parsed = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                return value
+            if isinstance(parsed, (dict, list)):
+                return _unwrap_string_encoded_json(parsed)
+    return value
+
+
+def _build_analysis_json(semantic_data: dict[str, Any]) -> str:
+    """
+    Build the {"analysis": ...} JSON payload for the response agent.
+
+    Unwraps any nested string-encoded JSON, then round-trips through
+    json.loads(json.dumps(...)) to verify the result is valid JSON.
+    Raises ValueError if validation fails.
+    """
+    cleaned = _unwrap_string_encoded_json(semantic_data or {})
+    payload = {"analysis": cleaned}
+    serialized = json.dumps(payload, ensure_ascii=False, default=str, indent=2)
+    json.loads(serialized)  # round-trip validation
+    return serialized
 
 # ── ANSI colors for terminal output ──
 _CYAN = "\033[96m"
@@ -116,6 +155,27 @@ def _format_traversal_data(state: RCAState) -> str:
     return "\n".join(lines)
 
 
+def _generate_algorithm(llm, user_query: str, data_context: str) -> str:
+    """
+    Ask a fast-tier LLM to turn the agent's tool trace into a numbered,
+    plain-English algorithm narrative. Runs in parallel with the main response
+    LLM. Returns "" on any failure — never blocks the main response.
+    """
+    try:
+        resp = llm.invoke([
+            SystemMessage(content=ALGORITHM_SYSTEM),
+            HumanMessage(content=(
+                f"## User Query\n{user_query}\n\n"
+                f"## Tool Trace\n{data_context}\n\n"
+                "Write the numbered algorithm now."
+            )),
+        ])
+        return (resp.content or "").strip()
+    except Exception as exc:
+        logger.warning("Algorithm generation failed: %s", exc)
+        return ""
+
+
 def _print_divider(char: str = "-", width: int = 70):
     print(f"{_DIM}{char * width}{_RESET}")
 
@@ -189,12 +249,25 @@ def response_node(state: RCAState) -> dict[str, Any]:
     Reads: refined_query (or user_query), traversal/planner data, errors
     Writes: final_response, calculations, data_summary, current_phase, messages
     """
-    provider = LLMProvider(model="gpt-5-mini", temperature=0.1)
+    provider = LLMProvider(model="gpt-4.1-mini", temperature=0.1)
     llm = provider.get_llm()
 
     user_query = state.get("refined_query") or state["user_query"]
     data_context = _format_traversal_data(state)
     errors = state.get("errors", [])
+
+    # Start algorithm narrative generation in parallel with the main response agent.
+    # Costs no extra wall-clock time — joined just before we return.
+    algorithm_result: dict[str, str] = {"value": ""}
+
+    def _algorithm_worker() -> None:
+        fast_llm = LLMProvider(model="gpt-5.4-mini", temperature=0.1).get_llm()
+        algorithm_result["value"] = _generate_algorithm(
+            fast_llm, user_query, data_context,
+        )
+
+    algorithm_thread = threading.Thread(target=_algorithm_worker, daemon=True)
+    algorithm_thread.start()
 
     # Build the human message with all context
     user_message_parts = [
@@ -211,6 +284,19 @@ def response_node(state: RCAState) -> dict[str, Any]:
     rca_guidance = state.get("rca_scenario_guidance", "").strip()
     if rca_guidance:
         user_message_parts.append(f"\n{rca_guidance}")
+
+    semantic_data = state.get("semantic_context_data") or {}
+    if isinstance(semantic_data, dict) and any(semantic_data.values()):
+        try:
+            analysis_json = _build_analysis_json(semantic_data)
+            user_message_parts.append(
+                "\n## Analysis (Semantic Context — Valid JSON)\n"
+                "```json\n"
+                f"{analysis_json}\n"
+                "```"
+            )
+        except (ValueError, TypeError) as exc:
+            logger.warning("Skipping analysis payload — JSON validation failed: %s", exc)
 
     user_message_parts.append(
         "\n## Instructions"
@@ -314,8 +400,12 @@ def response_node(state: RCAState) -> dict[str, Any]:
             step_num, elapsed, suffix,
         )
 
+        algorithm_thread.join(timeout=30)
+        execution_algorithm = algorithm_result["value"]
+
         return {
             "final_response": final_response,
+            "execution_algorithm": execution_algorithm,
             "calculations": f"{step_num} python calculations executed",
             "data_summary": {},
             "current_phase": "complete",
@@ -332,8 +422,10 @@ def response_node(state: RCAState) -> dict[str, Any]:
         elapsed = time.perf_counter() - start_time
         print(f"\n  {_RED}Analysis failed after {elapsed:.1f}s: {e}{_RESET}\n")
         logger.error("Analysis agent failed: %s", e)
+        algorithm_thread.join(timeout=5)
         return {
             "final_response": f"Analysis failed: {e}",
+            "execution_algorithm": algorithm_result["value"],
             "calculations": "",
             "data_summary": {},
             "current_phase": "complete",

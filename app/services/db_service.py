@@ -64,6 +64,28 @@ def close_pool() -> None:
 # Internal helpers
 # ─────────────────────────────────────────────
 
+def _unwrap_string_encoded_json(value):
+    """
+    Recursively walk a value and convert any string that is itself a JSON-encoded
+    object/array into the real parsed structure, so JSONB columns store real
+    JSON — never JSON enclosed in a string.
+    """
+    if isinstance(value, dict):
+        return {k: _unwrap_string_encoded_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unwrap_string_encoded_json(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")) and stripped.endswith(("}", "]")):
+            try:
+                parsed = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                return value
+            if isinstance(parsed, (dict, list)):
+                return _unwrap_string_encoded_json(parsed)
+    return value
+
+
 @contextmanager
 def _conn():
     """Get a connection from the pool, auto-commit/rollback and return it."""
@@ -142,6 +164,10 @@ def ensure_tables() -> None:
     migrate_ddl = f"""
         ALTER TABLE {_SCHEMA}.rca_agent_queries
             ADD COLUMN IF NOT EXISTS traces JSONB;
+        ALTER TABLE {_SCHEMA}.rca_agent_queries
+            ADD COLUMN IF NOT EXISTS analysis JSONB;
+        ALTER TABLE {_SCHEMA}.rca_agent_queries
+            ADD COLUMN IF NOT EXISTS algorithm TEXT;
     """
     try:
         with _conn() as conn:
@@ -270,14 +296,24 @@ def update_query_complete(
     final_response: str,
     duration_ms: float,
     traces: dict | None = None,
+    analysis: dict | None = None,
+    algorithm: str | None = None,
 ) -> None:
     """
     Finalize a completed query.
     planning_rationale is stored as a JSON array of the planner steps.
     traces is stored as a JSONB object with execution trace details.
+    analysis is stored as a JSONB object with the pre-fetched semantic context
+    (KPIs, question bank hits, RCA scenarios, keywords) used for this query.
+    algorithm is the numbered narrative of how the agent reached its answer,
+    produced by the parallel fast-LLM in agents/response.py.
     """
     planning_rationale = json.dumps(planner_steps) if planner_steps else None
     traces_json = json.dumps(traces) if traces else None
+    analysis_json = None
+    if analysis:
+        cleaned_analysis = _unwrap_string_encoded_json(analysis)
+        analysis_json = json.dumps(cleaned_analysis, ensure_ascii=False, default=str)
     _exec(
         f"""
         UPDATE {_SCHEMA}.rca_agent_queries SET
@@ -288,6 +324,8 @@ def update_query_complete(
             completed_at       = NOW(),
             duration_ms        = %s,
             traces             = %s,
+            analysis           = %s,
+            algorithm          = %s,
             status             = 'complete'
         WHERE query_id = %s
         """,
@@ -298,6 +336,8 @@ def update_query_complete(
             final_response,
             duration_ms,
             traces_json,
+            analysis_json,
+            algorithm or None,
             query_id,
         ),
     )

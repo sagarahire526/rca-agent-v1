@@ -1,0 +1,2 @@
+"Which regions and vendors have the highest Civil SLA breaches (>21 days) in the last 90 days, and which milestones are causing the delay? Where to focus for improvement"     "NTM"
+"Which vendors are consistently underperforming against planned volume daily/weekly, and what recovery actions are required?"     "NTM"

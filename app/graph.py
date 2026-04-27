@@ -118,6 +118,7 @@ def _make_initial_state(query: str, project_type: str, max_steps: int) -> RCASta
         "planner_step_results": [],
         "kg_schema": "",
         "planner_semantic_context": "",
+        "semantic_context_data": {},
         "traversal_findings": "",
         "traversal_tool_calls": [],
         "traversal_steps_taken": 0,

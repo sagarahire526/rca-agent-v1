@@ -58,6 +58,7 @@ class RCAState(TypedDict):
 
     # ── Pre-fetched semantic context ──
     planner_semantic_context: str
+    semantic_context_data: dict[str, Any]
 
     # ── Traversal Agent ──
     traversal_findings: str
@@ -70,6 +71,7 @@ class RCAState(TypedDict):
 
     # ── Response Agent ──
     final_response: str
+    execution_algorithm: str
     calculations: str
     data_summary: dict[str, Any]
 

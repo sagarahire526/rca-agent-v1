@@ -223,7 +223,7 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
     """
     warnings.filterwarnings("ignore", message=".*pandas only supports SQLAlchemy.*")
 
-    provider = LLMProvider(model="gpt-5-mini", temperature=0.0)
+    provider = LLMProvider(model="gpt-5.4-mini", temperature=0.0)
     llm = provider.get_llm()
 
     # Use refined_query (includes HITL clarification) if available
@@ -358,7 +358,7 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     """
     warnings.filterwarnings("ignore", message=".*pandas only supports SQLAlchemy.*")
 
-    provider = LLMProvider(model="gpt-5-mini", temperature=0.0)
+    provider = LLMProvider(model="gpt-5.4-mini", temperature=0.0)
     llm = provider.get_llm()
 
     # ── KG schema: per-sub-query embedding search + static table list ─────

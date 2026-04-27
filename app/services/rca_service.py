@@ -91,6 +91,7 @@ def run_query(
             planner_steps=state.get("planner_steps", []),
             final_response=state.get("final_response", ""),
             duration_ms=duration_ms,
+            analysis=state.get("semantic_context_data"),
         )
 
     return response
@@ -128,6 +129,7 @@ def resume_query(clarification: str, thread_id: str) -> dict:
                 planner_steps=state.get("planner_steps", []),
                 final_response=state.get("final_response", ""),
                 duration_ms=duration_ms,
+                analysis=state.get("semantic_context_data"),
             )
         else:
             db_svc.update_query_error(query_id, duration_ms)
