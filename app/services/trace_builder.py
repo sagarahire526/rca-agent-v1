@@ -6,23 +6,37 @@ and overall metrics. Stored as JSONB in rca_agent_queries.traces.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
-_MAX_TOOL_OUTPUT_LEN = 2000
 
+def _parse_tool_output(output: Any) -> Any:
+    """
+    Convert tool_output into a real JSON object/array when possible so that the
+    trace JSONB stores it as nested JSON, not a JSON-encoded string.
 
-def _truncate_tool_output(output: Any) -> str:
-    """Cap tool_output to _MAX_TOOL_OUTPUT_LEN chars for DB storage."""
-    s = str(output) if not isinstance(output, str) else output
-    if len(s) > _MAX_TOOL_OUTPUT_LEN:
-        return s[:_MAX_TOOL_OUTPUT_LEN] + "...[truncated]"
-    return s
+    The langchain tools already apply per-tool size budgets (see
+    tools/langchain_tools._TOOL_CHAR_LIMITS) and re-serialize structurally
+    after any truncation, so the strings we receive here are valid JSON in
+    the common case. Anything that isn't parseable is returned as-is.
+    """
+    if isinstance(output, (dict, list)):
+        return output
+    if not isinstance(output, str):
+        return output
+    stripped = output.strip()
+    if not stripped or stripped[0] not in "{[":
+        return output
+    try:
+        return json.loads(stripped)
+    except (ValueError, TypeError):
+        return output
 
 
 def _sanitize_tool_calls(tool_calls: list[dict]) -> list[dict]:
-    """Return tool call records with truncated outputs."""
+    """Return tool call records with tool_output decoded from JSON-string to JSON object."""
     return [
-        {**tc, "tool_output": _truncate_tool_output(tc.get("tool_output", ""))}
+        {**tc, "tool_output": _parse_tool_output(tc.get("tool_output", ""))}
         for tc in tool_calls
     ]
 
