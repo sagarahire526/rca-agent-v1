@@ -168,6 +168,8 @@ def ensure_tables() -> None:
             ADD COLUMN IF NOT EXISTS analysis JSONB;
         ALTER TABLE {_SCHEMA}.rca_agent_queries
             ADD COLUMN IF NOT EXISTS algorithm TEXT;
+        ALTER TABLE {_SCHEMA}.rca_agent_queries
+            ADD COLUMN IF NOT EXISTS charts JSONB;
     """
     try:
         with _conn() as conn:
@@ -298,6 +300,7 @@ def update_query_complete(
     traces: dict | None = None,
     analysis: dict | None = None,
     algorithm: str | None = None,
+    charts: dict | None = None,
 ) -> None:
     """
     Finalize a completed query.
@@ -307,6 +310,10 @@ def update_query_complete(
     (KPIs, question bank hits, RCA scenarios, keywords) used for this query.
     algorithm is the numbered narrative of how the agent reached its answer,
     produced by the parallel fast-LLM in agents/response.py.
+    charts is the full Highcharts-compatible payload {"charts": [...],
+    "rationale": "..."} produced by the parallel chart-generation LLM in
+    agents/response.py — stored so the /chart/{query_id} endpoint can
+    re-serve it without re-running the agent.
     """
     planning_rationale = json.dumps(planner_steps) if planner_steps else None
     traces_json = json.dumps(traces) if traces else None
@@ -314,6 +321,7 @@ def update_query_complete(
     if analysis:
         cleaned_analysis = _unwrap_string_encoded_json(analysis)
         analysis_json = json.dumps(cleaned_analysis, ensure_ascii=False, default=str)
+    charts_json = json.dumps(charts, ensure_ascii=False, default=str) if charts else None
     _exec(
         f"""
         UPDATE {_SCHEMA}.rca_agent_queries SET
@@ -326,6 +334,7 @@ def update_query_complete(
             traces             = %s,
             analysis           = %s,
             algorithm          = %s,
+            charts             = %s,
             status             = 'complete'
         WHERE query_id = %s
         """,
@@ -338,6 +347,7 @@ def update_query_complete(
             traces_json,
             analysis_json,
             algorithm or None,
+            charts_json,
             query_id,
         ),
     )
@@ -517,6 +527,22 @@ def get_messages_by_thread(thread_id: str) -> list[dict]:
         ORDER BY started_at ASC
         """,
         (thread_id,),
+    )
+
+
+def get_charts_by_query_id(query_id: str) -> dict | None:
+    """
+    Return the chart payload + the original query text for a single query.
+    Used by the /chart/{query_id} endpoints. Returns None if the query row
+    does not exist.
+    """
+    return _fetch_row(
+        f"""
+        SELECT charts, original_query
+        FROM {_SCHEMA}.rca_agent_queries
+        WHERE query_id = %s
+        """,
+        (query_id,),
     )
 
 

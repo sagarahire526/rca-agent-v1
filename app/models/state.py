@@ -72,6 +72,7 @@ class RCAState(TypedDict):
     # ── Response Agent ──
     final_response: str
     execution_algorithm: str
+    generated_charts: dict[str, Any]   # {"charts": [...], "rationale": "..."}
     calculations: str
     data_summary: dict[str, Any]
 

@@ -23,6 +23,7 @@ from services.llm_provider import LLMProvider
 from tools.langchain_tools import get_analysis_tools
 from prompts.response_prompt import RESPONSE_SYSTEM
 from prompts.algorithm_prompt import ALGORITHM_SYSTEM
+from prompts.chart_prompt import CHART_SYSTEM
 
 
 logger = logging.getLogger(__name__)
@@ -176,6 +177,50 @@ def _generate_algorithm(llm, user_query: str, data_context: str) -> str:
         return ""
 
 
+def _generate_charts(llm, user_query: str, data_context: str) -> dict[str, Any]:
+    """
+    Ask a fast-tier LLM to produce Highcharts-compatible chart specs from the
+    traversal data. Runs in parallel with the main response LLM. Returns
+    {"charts": [], "rationale": ""} on any failure — never blocks the main
+    response. The full {charts, rationale} payload is stored as-is so the
+    /chart/{query_id} endpoint can serve it directly to the frontend.
+    """
+    empty: dict[str, Any] = {"charts": [], "rationale": ""}
+    raw = ""
+    try:
+        resp = llm.invoke([
+            SystemMessage(content=CHART_SYSTEM),
+            HumanMessage(content=(
+                f"## User Query\n{user_query}\n\n"
+                f"## Traversal Data\n{data_context}\n\n"
+                "Generate Highcharts specs now. Return ONLY JSON."
+            )),
+        ])
+        raw = (resp.content or "").strip()
+        if raw.startswith("```"):
+            # Strip an accidental ```json ... ``` fence if the model emits one
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            logger.warning("Chart LLM returned non-dict JSON: %.200s", raw)
+            return empty
+        charts = parsed.get("charts", [])
+        rationale = parsed.get("rationale", "")
+        return {
+            "charts":    charts if isinstance(charts, list) else [],
+            "rationale": rationale if isinstance(rationale, str) else "",
+        }
+    except json.JSONDecodeError as exc:
+        logger.warning("Chart JSON parse failed: %s | raw=%.500s", exc, raw)
+        return empty
+    except Exception as exc:
+        logger.warning("Chart generation failed: %s", exc)
+        return empty
+
+
 def _print_divider(char: str = "-", width: int = 70):
     print(f"{_DIM}{char * width}{_RESET}")
 
@@ -268,6 +313,26 @@ def response_node(state: RCAState) -> dict[str, Any]:
 
     algorithm_thread = threading.Thread(target=_algorithm_worker, daemon=True)
     algorithm_thread.start()
+
+    # Start Highcharts spec generation in parallel as well — same fast tier,
+    # low reasoning effort. Joined just before we return.
+    chart_result: dict[str, dict[str, Any]] = {
+        "value": {"charts": [], "rationale": ""},
+    }
+
+    def _chart_worker() -> None:
+        try:
+            fast_llm = LLMProvider(
+                model="gpt-5.4-mini", temperature=0.1, reasoning_effort="low",
+            ).get_llm()
+            chart_result["value"] = _generate_charts(
+                fast_llm, user_query, data_context,
+            )
+        except Exception as exc:
+            logger.warning("Chart worker setup failed: %s", exc)
+
+    chart_thread = threading.Thread(target=_chart_worker, daemon=True)
+    chart_thread.start()
 
     # Build the human message with all context
     user_message_parts = [
@@ -402,10 +467,13 @@ def response_node(state: RCAState) -> dict[str, Any]:
 
         algorithm_thread.join(timeout=30)
         execution_algorithm = algorithm_result["value"]
+        chart_thread.join(timeout=30)
+        generated_charts = chart_result["value"]
 
         return {
             "final_response": final_response,
             "execution_algorithm": execution_algorithm,
+            "generated_charts": generated_charts,
             "calculations": f"{step_num} python calculations executed",
             "data_summary": {},
             "current_phase": "complete",
@@ -423,9 +491,11 @@ def response_node(state: RCAState) -> dict[str, Any]:
         print(f"\n  {_RED}Analysis failed after {elapsed:.1f}s: {e}{_RESET}\n")
         logger.error("Analysis agent failed: %s", e)
         algorithm_thread.join(timeout=5)
+        chart_thread.join(timeout=5)
         return {
             "final_response": f"Analysis failed: {e}",
             "execution_algorithm": algorithm_result["value"],
+            "generated_charts": chart_result["value"],
             "calculations": "",
             "data_summary": {},
             "current_phase": "complete",

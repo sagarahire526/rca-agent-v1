@@ -49,18 +49,19 @@ Given the user query and available schema/semantic context, generate precise and
 sub-queries for parallel investigation. \
 **Your sub-queries must always be grounded in the USER'S ACTUAL QUERY** — not scenario questions \
 from the Semantic Context. Semantic Context is reference material only; never replace or \
-substitute the user's question with scenario questions.
+substitute the user's question with scenario questions exactly.
 
 Each sub-query must:
 1. Be **fully self-contained** — answerable by a single traversal agent with NO context from \
 other steps. Steps run in parallel on independent threads and cannot see each other's results. \
 NEVER write "for the GCs from step 1", "using step 2 results", or any cross-step reference.
 2. Target a specific investigation dimension
-3. Be concrete — name the specific KPI node, entity, region, or relationship to investigate
+3. **Stay in business language** — describe the data need plainly (e.g. "H&S non-compliance \
+counts per region for the last 60 days"). Do NOT include KPI labels, node_ids, kpi_ids, \
+UUIDs, table names, column names, or any DB-style identifier. The Traversal Agent has its \
+own semantic search and node-lookup tools and will resolve the right KPIs/nodes from your \
+business phrasing. See the "NEVER fabricate identifiers" rule below.
 4. Be non-overlapping — never investigate the same thing twice
-5. Reference specific KPI node_ids from the schema when possible — the traversal agent will \
-use `get_kpi(node_id)` to fetch the computation logic (Python function, source tables, columns) \
-and then query PostgreSQL with that logic
 
 ## Step Count Guidance
 - Minimum: 2 steps (never fewer)
@@ -84,53 +85,21 @@ Schema:
 - Each step string MUST start with "Sub-query N: " where N is the step number.
 - Semantic Context (KPIs, QA, RCA scenarios) is REFERENCE ONLY — use it to identify \
 relevant KPI nodes, table names, and SQL patterns, but always phrase sub-queries around \
-what the USER asked, not what the scenario asks.
+what the USER asked, not what the scenario received.
 - Prefer specificity over breadth — narrower sub-queries produce better traversal results.
 - Always include a problem quantification step (how bad is the problem? how many affected?).
 - Always include a root cause data step (what factors are driving the issue?).
 - Include a vendor/GC breakdown step for any performance or compliance query.
-- Reference KPI node_ids from the schema in your sub-queries when applicable (e.g., \
-"Using KPI node 'on_air_cycle_time', compute the average cycle time by region").
+- **NEVER fabricate identifiers**: Do not include numeric IDs (e.g. `kpi_id: 783134/842140`), \
+UUIDs, node_ids, kpi_ids, table names, column names, or any DB-style identifier in step \
+text. If you find yourself wanting to write one, replace it with the entity's business \
+name. The KG Schema and Semantic Context above are reference material for YOU to \
+understand what data exists — they are not a vocabulary for step text.
+- **Stay business-level**: Phrase each sub-query as a business question (the data \
+dimension + filters). Do not name specific KPIs, core nodes, or schema artifacts in the \
+sub-query. The Traversal Agent has its own semantic search and node-lookup tools and \
+will pick the right KPIs/nodes from your phrasing.
+  Example: ✗ "Sub-query 1: Using kpi_h_s_noncompliance_count, retrieve H&S violations for SOUTH region."
+           ✓ "Sub-query 1: Retrieve H&S non-compliance counts per region for the last 60 days, ranked highest to lowest."
 - Do NOT add markdown code fences — return raw JSON only.
-
-## Examples
-
-### H&S Non-Compliance Investigation
-User query: "Which regions have the highest H&S non-compliance cases in the last 60 days?"
-
-→ {{
-    "planning_rationale": "To investigate H&S non-compliance root causes, we need the overall non-compliance count by region, the breakdown by specific H&S metric (PPE, JSA, check-in), and the vendor-level detail to identify repeat violators and recommend targeted corrective actions.",
-    "steps": [
-        "Sub-query 1: What is the total number of H&S non-compliance sites per region in the last 60 days, ranked from highest to lowest?",
-        "Sub-query 2: What is the breakdown of non-compliance by H&S metric type (PPE status, JSA status, check-in failure) per region in the last 60 days?",
-        "Sub-query 3: Which GCs/vendors have the highest number of H&S non-compliance sites in the last 60 days, with their PPE and JSA pass/fail counts?",
-        "Sub-query 4: What are the corrective action statuses and repeat violation patterns for the top offending vendors and regions?"
-    ]
-}}
-
-### Civil SLA Breach Investigation
-User query: "Which regions and vendors have the highest Civil SLA breaches (>21 days) in the last 90 days?"
-
-→ {{
-    "planning_rationale": "To identify root causes of Civil SLA breaches, we need the breach count by region and vendor, the milestone-level breakdown showing where delays occur, and the contributing factors (crew availability, material, site access) to recommend targeted recovery actions.",
-    "steps": [
-        "Sub-query 1: How many sites have Civil SLA breaches (>21 days from Civil Start to Civil Complete) per region in the last 90 days?",
-        "Sub-query 2: Which GCs/vendors have the highest Civil SLA breach count in the last 90 days, with their planned vs actual completion rates?",
-        "Sub-query 3: What is the milestone-level delay breakdown for breached sites — which specific milestones (Civil Start, Civil Complete) are causing the most delay?",
-        "Sub-query 4: What are the primary delay reasons for breached sites — crew availability, material delivery, site access, or vendor planning issues?"
-    ]
-}}
-
-### Vendor Performance Investigation
-User query: "Which GCs have the worst delivery vs plan and what should we do?"
-
-→ {{
-    "planning_rationale": "To assess vendor underperformance, we need planned vs actual delivery data per GC, the breakdown by activity type (Civil, RAN), and analysis of contributing factors (headcount, rework, execution quality) to recommend specific recovery actions.",
-    "steps": [
-        "Sub-query 1: What is the planned vs actual site delivery count per GC for the analysis period, ranked by performance gap?",
-        "Sub-query 2: What is the breakdown of underperformance by activity type (Civil, RAN) for the bottom-performing GCs?",
-        "Sub-query 3: What are the headcount, crew utilization, and rework rates for underperforming GCs?",
-        "Sub-query 4: What are the historical performance trends for underperforming GCs — is performance declining, stable, or improving?"
-    ]
-}}
 """

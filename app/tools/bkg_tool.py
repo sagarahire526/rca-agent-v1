@@ -79,6 +79,32 @@ class BKGTool:
         """Resolve alias to canonical node_id. Returns as-is if already canonical."""
         return self.aliases.get(raw_id, self.aliases.get(raw_id.upper(), raw_id))
 
+    def _fuzzy_resolve_id(self, raw_id: str) -> tuple[str | None, list[dict]]:
+        """
+        Recover from an LLM that truncated or mistyped a node_id.
+
+        Returns:
+          (id, [])       — unique prefix match, caller should use `id`
+          (None, [...])  — multiple matches, caller surfaces candidates
+          (None, [])     — nothing close, caller emits the original error
+        """
+        if not raw_id or len(raw_id) < 8:
+            return (None, [])
+        rows = self._run(
+            """
+            MATCH (n:BKGNode)
+            WHERE n.node_id STARTS WITH $p
+            RETURN n.node_id     AS node_id,
+                   n.name        AS name,
+                   n.entity_type AS entity_type
+            LIMIT 5
+            """,
+            p=raw_id,
+        )
+        if len(rows) == 1:
+            return (rows[0]["node_id"], [])
+        return (None, rows)
+
     def query(self, request: dict) -> dict:
         mode = request.get("mode")
         try:
@@ -130,8 +156,7 @@ class BKGTool:
     def _get_node(self, raw_id: str) -> dict:
         node_id = self.resolve_id(raw_id)
 
-        rows = self._run(
-            """
+        node_query = """
             MATCH (n:BKGNode {node_id: $nid})
             RETURN
                 n.node_id            AS node_id,
@@ -146,9 +171,20 @@ class BKGTool:
                 n.map_label_column   AS map_label_column,
                 n.map_python_function AS map_python_function,
                 n.map_contract       AS map_contract
-            """,
-            nid=node_id,
-        )
+            """
+
+        rows = self._run(node_query, nid=node_id)
+        if not rows:
+            recovered, candidates = self._fuzzy_resolve_id(node_id)
+            if recovered:
+                logger.info("get_node: prefix-recovered %r → %r", raw_id, recovered)
+                node_id = recovered
+                rows = self._run(node_query, nid=node_id)
+            elif candidates:
+                return {
+                    "error": f"'{raw_id}' did not match exactly. Pick one and retry:",
+                    "candidates": candidates,
+                }
         if not rows:
             return {
                 "error": (
@@ -399,8 +435,7 @@ class BKGTool:
         """
         node_id = self.resolve_id(raw_id)
 
-        rows = self._run(
-            """
+        kpi_query = """
             MATCH (n:BKGNode {node_id: $nid})
             WHERE n.entity_type = 'kpi'
             RETURN
@@ -424,9 +459,20 @@ class BKGTool:
                 n.kpi_dimensions            AS kpi_dimensions,
                 n.kpi_filters               AS kpi_filters,
                 n.kpi_output_schema         AS kpi_output_schema
-            """,
-            nid=node_id,
-        )
+            """
+
+        rows = self._run(kpi_query, nid=node_id)
+        if not rows:
+            recovered, candidates = self._fuzzy_resolve_id(node_id)
+            if recovered:
+                logger.info("get_kpi: prefix-recovered %r → %r", raw_id, recovered)
+                node_id = recovered
+                rows = self._run(kpi_query, nid=node_id)
+            elif candidates:
+                return {
+                    "error": f"'{raw_id}' did not match exactly. Pick one and retry:",
+                    "candidates": candidates,
+                }
         if rows:
             kpi_data = self._parse_json_props(rows[0])
 

@@ -21,15 +21,22 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
 @lru_cache(maxsize=10)
-def _get_cached_llm(model: str, temperature: float) -> ChatOpenAI:
-    """Return a shared ChatOpenAI instance for this (model, temperature) pair."""
-    return ChatOpenAI(
-        api_key=OPENAI_API_KEY,
-        model=model,
-        temperature=temperature,
-        max_retries=3,
-        request_timeout=120,
-    )
+def _get_cached_llm(
+    model: str,
+    temperature: float,
+    reasoning_effort: str | None,
+) -> ChatOpenAI:
+    """Return a shared ChatOpenAI instance for this (model, temperature, reasoning_effort) tuple."""
+    kwargs = {
+        "api_key": OPENAI_API_KEY,
+        "model": model,
+        "temperature": temperature,
+        "max_retries": 3,
+        "request_timeout": 120,
+    }
+    if reasoning_effort:
+        kwargs["reasoning_effort"] = reasoning_effort
+    return ChatOpenAI(**kwargs)
 
 
 class LLMProvider:
@@ -37,11 +44,12 @@ class LLMProvider:
     Instance-based LLM provider.
 
     Each instance wraps a single ChatOpenAI configured for a specific model.
-    Instances with the same (model, temperature) share the underlying client.
+    Instances with the same (model, temperature, reasoning_effort) share the
+    underlying client.
     """
 
-    def __init__(self, model="gpt-4.1-mini", temperature=0.2):
-        self.llm = _get_cached_llm(model, temperature)
+    def __init__(self, model="gpt-4.1-mini", temperature=0.2, reasoning_effort=None):
+        self.llm = _get_cached_llm(model, temperature, reasoning_effort)
 
     def get_llm(self):
         return self.llm

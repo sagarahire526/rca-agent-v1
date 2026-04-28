@@ -125,6 +125,8 @@ def _make_initial_state(query: str, project_type: str, max_steps: int) -> RCASta
         "max_traversal_steps": max_steps,
         "rca_scenario_guidance": "",
         "final_response": "",
+        "execution_algorithm": "",
+        "generated_charts": {"charts": [], "rationale": ""},
         "calculations": "",
         "data_summary": {},
         "errors": [],

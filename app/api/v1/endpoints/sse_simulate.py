@@ -91,6 +91,7 @@ def _run_stream_thread(
             traces=traces,
             analysis=final_state.get("semantic_context_data"),
             algorithm=final_state.get("execution_algorithm", ""),
+            charts=final_state.get("generated_charts", []),
         )
         sse_manager.put_sync(query_id, "complete", {
             "final_response":      final_state.get("final_response", ""),
@@ -101,6 +102,7 @@ def _run_stream_thread(
             "errors":              final_state.get("errors", []),
             "traces":              traces,
             "execution_algorithm": final_state.get("execution_algorithm", ""),
+            "generated_charts":    final_state.get("generated_charts", []),
         })
 
     except Exception as exc:
