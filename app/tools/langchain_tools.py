@@ -305,41 +305,64 @@ _BOTH_SMP_VALUES = ("NTM", "AHLOB Modernization")
 def _check_macro_combined_filter(code: str, project_type: str) -> str | None:
     """
     If code references the macro_combined table, verify that the correct
-    smp_name filter is present. Returns an error message if missing, else None.
+    smp_name filter is present AND no wrong project-type literal is present.
+    Returns an error message if invalid, else None.
     """
     if _MACRO_TABLE not in code:
         return None
 
+    ntm_eq = re.compile(r"smp_name\s*=\s*'NTM'", re.IGNORECASE)
+    ahlob_eq = re.compile(
+        r"smp_name\s*=\s*'AHLOB Modernization'", re.IGNORECASE
+    )
+
     if project_type == "Both":
-        # Must have IN clause with both values
-        has_in = re.search(
-            r"smp_name\s+IN\s*\(",
-            code,
-            re.IGNORECASE,
-        )
+        has_in = re.search(r"smp_name\s+IN\s*\(", code, re.IGNORECASE)
         has_both = (
             _BOTH_SMP_VALUES[0] in code and _BOTH_SMP_VALUES[1] in code
         )
-        if has_in and has_both:
-            return None
+        if not (has_in and has_both):
+            return (
+                f"ERROR: Your SQL references `{_MACRO_TABLE}` but is missing the "
+                f"mandatory filter: smp_name IN ('{_BOTH_SMP_VALUES[0]}', '{_BOTH_SMP_VALUES[1]}'). "
+                f"Add this WHERE/AND condition and retry."
+            )
+        # User selected Both — a bare equality would collapse to one type
+        if ntm_eq.search(code) or ahlob_eq.search(code):
+            return (
+                f"ERROR: User selected 'Both' project types, but your SQL contains a "
+                f"standalone `smp_name = '...'` equality which collapses to a single type. "
+                f"Use ONLY `smp_name IN ('{_BOTH_SMP_VALUES[0]}', '{_BOTH_SMP_VALUES[1]}')` "
+                f"and remove any `smp_name = '<single value>'` clause. Retry."
+            )
+        return None
+
+    # Single project type — must contain the selected one and not the other
+    expected = re.compile(
+        rf"smp_name\s*=\s*'{re.escape(project_type)}'", re.IGNORECASE
+    )
+    if not expected.search(code):
         return (
             f"ERROR: Your SQL references `{_MACRO_TABLE}` but is missing the "
-            f"mandatory filter: smp_name IN ('{_BOTH_SMP_VALUES[0]}', '{_BOTH_SMP_VALUES[1]}'). "
+            f"mandatory filter: smp_name = '{project_type}'. "
             f"Add this WHERE/AND condition and retry."
         )
 
-    # Single project type
-    pattern = re.compile(
-        rf"smp_name\s*=\s*'{re.escape(project_type)}'",
-        re.IGNORECASE,
+    wrong_value = next(
+        (v for v in _BOTH_SMP_VALUES if v != project_type), None
     )
-    if pattern.search(code):
-        return None
-    return (
-        f"ERROR: Your SQL references `{_MACRO_TABLE}` but is missing the "
-        f"mandatory filter: smp_name = '{project_type}'. "
-        f"Add this WHERE/AND condition and retry."
-    )
+    if wrong_value:
+        wrong_pattern = re.compile(
+            rf"smp_name\s*=\s*'{re.escape(wrong_value)}'", re.IGNORECASE
+        )
+        if wrong_pattern.search(code):
+            return (
+                f"ERROR: User selected project type '{project_type}', but your SQL contains "
+                f"`smp_name = '{wrong_value}'`. This is likely copied from a Semantic Context "
+                f"snippet for a different project type. Replace every `smp_name = '{wrong_value}'` "
+                f"with `smp_name = '{project_type}'` and retry."
+            )
+    return None
 
 
 def _make_filtered_run_sql_python(project_type: str) -> StructuredTool:
