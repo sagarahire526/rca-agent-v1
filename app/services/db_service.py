@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import uuid
 from contextlib import contextmanager
 
@@ -63,6 +64,24 @@ def close_pool() -> None:
 # ─────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────
+
+def _sanitize_json(value):
+    """Replace NaN/Infinity floats with None — PostgreSQL JSON rejects them."""
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+    if isinstance(value, dict):
+        return {k: _sanitize_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_json(item) for item in value]
+    return value
+
+
+def _dumps_safe(value, **kwargs) -> str:
+    """json.dumps that strips NaN/Infinity so PostgreSQL JSONB will accept it."""
+    return json.dumps(_sanitize_json(value), **kwargs)
+
 
 def _unwrap_string_encoded_json(value):
     """
@@ -315,13 +334,13 @@ def update_query_complete(
     agents/response.py — stored so the /chart/{query_id} endpoint can
     re-serve it without re-running the agent.
     """
-    planning_rationale = json.dumps(planner_steps) if planner_steps else None
-    traces_json = json.dumps(traces) if traces else None
+    planning_rationale = _dumps_safe(planner_steps) if planner_steps else None
+    traces_json = _dumps_safe(traces, default=str) if traces else None
     analysis_json = None
     if analysis:
         cleaned_analysis = _unwrap_string_encoded_json(analysis)
-        analysis_json = json.dumps(cleaned_analysis, ensure_ascii=False, default=str)
-    charts_json = json.dumps(charts, ensure_ascii=False, default=str) if charts else None
+        analysis_json = _dumps_safe(cleaned_analysis, ensure_ascii=False, default=str)
+    charts_json = _dumps_safe(charts, ensure_ascii=False, default=str) if charts else None
     _exec(
         f"""
         UPDATE {_SCHEMA}.rca_agent_queries SET
@@ -402,8 +421,8 @@ def create_hitl_clarification(
             str(uuid.uuid4()),
             query_id,
             thread_id,
-            json.dumps(questions_asked),
-            json.dumps(assumptions_offered),
+            _dumps_safe(questions_asked),
+            _dumps_safe(assumptions_offered),
         ),
     )
 
