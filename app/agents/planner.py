@@ -139,7 +139,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         logger.warning("Semantic search in planner failed (non-fatal): %s", e)
 
     # ── Step 2: LLM creates the investigation plan ──
-    provider = LLMProvider(model="gpt-4o-mini")
+    provider = LLMProvider(model="gpt-5", reasoning_effort="medium")
     llm = provider.get_llm()
 
     safe_kg_schema = kg_schema.replace("{", "{{").replace("}", "}}")

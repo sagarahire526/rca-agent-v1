@@ -87,7 +87,7 @@ def query_refiner_node(state: RCAState) -> dict[str, Any]:
     print(f"  {_DIM}Query: {user_query}{_RESET}", flush=True)
     print(f"  {_GREEN}Project type (from input): {project_type}{_RESET}\n", flush=True)
 
-    llm = LLMProvider(model="gpt-4o-mini").get_llm()
+    llm = LLMProvider(model="gpt-5.4-mini", reasoning_effort="low").get_llm()
 
     # ── Fetch entity lookups and inject into prompt ──
     lookups = get_all_entity_lookups()

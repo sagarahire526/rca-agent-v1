@@ -3,10 +3,20 @@ LangChain tool wrappers for the autonomous Traversal Agent.
 
 Wraps existing tools (neo4j_tool, bkg_tool, python_sandbox) as
 @tool functions that the ReAct agent can call.
+
+Tools are ordered by recommended usage sequence (KPI-first):
+  1. get_kpi        — FIRST CHOICE: KPI formula, logic, python function, source tables
+  2. get_node       — FALLBACK: core node map_* properties when KPI is insufficient
+  3. find_relevant  — ONLY when schema doesn't reveal the right nodes
+  4. traverse_graph — ONLY when schema relationship map is insufficient
+  5. run_sql_python — query PostgreSQL with Python
+  6. run_python     — sandboxed calculations
+  7. run_cypher     — read-only Neo4j Cypher (last resort)
 """
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Optional
 
@@ -16,94 +26,35 @@ from tools.neo4j_tool import neo4j_tool
 from tools.bkg_tool import BKGTool
 from tools.python_sandbox import execute_python, PythonSandbox
 
-
-# ─────────────────────────────────────────────
-# GROUP BY dimension extraction
-# ─────────────────────────────────────────────
-
-_PYTHON_FUNC_KEYS = ("kpi_python_function", "map_python_function")
+logger = logging.getLogger(__name__)
 
 
-def _extract_group_by_dimensions(python_function: str) -> dict | None:
-    """
-    Parse a kpi_python_function / map_python_function string to:
-    1. Extract the GROUP BY column list
-    2. Replace the GROUP BY line with a placeholder comment
-
-    Returns dict with extracted info, or None if no GROUP BY found.
-    """
-    if not python_function or not isinstance(python_function, str):
-        return None
-
-    pattern = r'(GROUP\s+BY\s+)([\w\s,\.]+?)(\s*(?:\n|"""|\'\'\'|\)|$))'
-    match = re.search(pattern, python_function, re.IGNORECASE)
-    if not match:
-        return None
-
-    raw_columns = match.group(2)
-    dimensions = [col.strip() for col in raw_columns.split(",") if col.strip()]
-    if not dimensions:
-        return None
-
-    placeholder = "-- GROUP BY: <SELECT from available_dimensions based on your query granularity>"
-    modified_function = (
-        python_function[:match.start()]
-        + placeholder
-        + python_function[match.end():]
-    )
-
-    return {
-        "available_dimensions": dimensions,
-        "modified_function": modified_function,
-    }
+# Lazy singleton for BKGTool
+_bkg: BKGTool | None = None
 
 
-def _process_python_functions(result: dict) -> dict:
-    """
-    For any dict containing kpi_python_function or map_python_function,
-    extract GROUP BY dimensions, replace the clause with a placeholder,
-    and add a ⚠️_GROUP_BY_DECISION field so the traversal agent picks
-    the right granularity instead of blindly copying the full GROUP BY.
-    """
-    all_dimensions: list[str] = []
-    for key in _PYTHON_FUNC_KEYS:
-        func_str = result.get(key)
-        if not func_str:
-            continue
-        extracted = _extract_group_by_dimensions(func_str)
-        if extracted:
-            result[key] = extracted["modified_function"]
-            all_dimensions.extend(extracted["available_dimensions"])
-
-    if all_dimensions:
-        # Deduplicate while preserving order
-        seen = set()
-        unique = []
-        for d in all_dimensions:
-            if d not in seen:
-                seen.add(d)
-                unique.append(d)
-        result["⚠️_GROUP_BY_DECISION"] = {
-            "available_dimensions": unique,
-            "instruction": (
-                "Do NOT use all dimensions. SELECT only the ones your "
-                "sub-query needs. See STEP 2a in your system prompt."
-            ),
-        }
-    return result
+def _get_bkg() -> BKGTool:
+    global _bkg
+    if _bkg is None:
+        _bkg = BKGTool()
+    return _bkg
 
 
 # ─────────────────────────────────────────────
-# Per-tool character limits (context overflow defense)
+# Tool output truncation — prevents context overflow
 # ─────────────────────────────────────────────
+# Per-tool char limits for what gets returned to the LLM.
+# get_kpi / get_node are NOT truncated — kpi_python_function /
+# map_python_function must stay intact for SQL writing.
+# Data tools (run_sql_python, run_cypher) are capped tighter — the agent
+# only needs sample rows + counts (plus full-data aggregates), not the
+# entire dataset.
 
 _TOOL_CHAR_LIMITS = {
-    "get_kpi":        50000,
-    "get_node":       50000,
     "find_relevant":  6000,
     "traverse_graph": 6000,
-    "run_sql_python": 10000,
-    "run_python":     10000,
+    "run_sql_python": 30000,
+    "run_python":     30000,
     "run_cypher":     6000,
 }
 
@@ -113,6 +64,10 @@ def _truncate_tool_output(tool_name: str, raw_json: str) -> str:
     Truncate a tool's JSON output to fit within the tool's char budget.
     Preserves structure: for list results, keeps first N rows + total count.
     For errors, always returns full output (errors are small and needed for retry).
+
+    This is the primary defense against context overflow. Each parallel
+    traversal agent has its own message history — truncation is local,
+    no cross-agent interference.
     """
     limit = _TOOL_CHAR_LIMITS.get(tool_name, 3000)
 
@@ -128,22 +83,58 @@ def _truncate_tool_output(tool_name: str, raw_json: str) -> str:
         if parsed.get("status") == "error" or "error" in parsed:
             return raw_json
 
+        # Structured aggregate result: {"summary": ..., "detail_rows": [...], "total_rows": N}
+        # Preserve summary intact, only truncate detail_rows if needed.
+        if isinstance(parsed.get("result"), dict) and "summary" in parsed["result"]:
+            candidate = json.dumps(parsed, default=str)
+            if len(candidate) <= limit:
+                return candidate
+            detail = parsed["result"].get("detail_rows", [])
+            if isinstance(detail, list):
+                keep = len(detail)
+                while keep > 0:
+                    parsed["result"]["detail_rows"] = detail[:keep]
+                    candidate = json.dumps(parsed, default=str)
+                    if len(candidate) <= limit:
+                        return candidate
+                    keep = keep // 2
+                parsed["result"]["detail_rows"] = []
+            return json.dumps(parsed, default=str)[:limit]
+
         # run_sql_python / run_python: truncate the 'result' list
         if "result" in parsed and isinstance(parsed["result"], list):
             rows = parsed["result"]
             total = len(rows)
+
+            # Auto-aggregate safety net: compute basic stats from FULL data
+            # before truncating rows. This ensures accurate totals survive truncation.
+            if total > 0:
+                try:
+                    import pandas as pd
+                    df = pd.DataFrame(rows)
+                    agg: dict = {"total_rows": total}
+                    for col in df.columns:
+                        if pd.api.types.is_numeric_dtype(df[col]):
+                            agg[f"{col}__sum"] = float(df[col].sum())
+                            agg[f"{col}__avg"] = round(float(df[col].mean()), 2)
+                    parsed["_full_data_aggregates"] = agg
+                except Exception:
+                    parsed["_full_data_aggregates"] = {"total_rows": total}
+
+            # Binary search for how many rows fit
             keep = total
             while keep > 0:
                 parsed["result"] = rows[:keep]
                 parsed["_truncated"] = {
                     "total_rows": total,
                     "rows_shown": keep,
-                    "message": f"Showing {keep} of {total} rows. Use aggregations/GROUP BY to reduce."
+                    "message": f"Showing {keep} of {total} rows. Aggregates in _full_data_aggregates are from FULL dataset."
                 }
                 candidate = json.dumps(parsed, default=str)
                 if len(candidate) <= limit:
                     return candidate
                 keep = keep // 2
+            # Even 0 rows too big — shouldn't happen but fallback
             parsed["result"] = []
             parsed["_truncated"] = {"total_rows": total, "rows_shown": 0}
             return json.dumps(parsed, default=str)[:limit]
@@ -162,7 +153,7 @@ def _truncate_tool_output(tool_name: str, raw_json: str) -> str:
                     return candidate
                 keep = keep // 2
 
-        # get_kpi / get_node / find_relevant: truncate large string fields
+        # find_relevant / traverse_graph: truncate large string fields
         compact = json.dumps(parsed, default=str)
         if len(compact) <= limit:
             return compact
@@ -171,15 +162,43 @@ def _truncate_tool_output(tool_name: str, raw_json: str) -> str:
     return raw_json[:limit] + '\n... (truncated by tool trimmer)'
 
 
-# Lazy singleton for BKGTool
-_bkg: BKGTool | None = None
+# ─────────────────────────────────────────────
+# GROUP BY dimension extraction
+# ─────────────────────────────────────────────
 
+def _extract_group_by_dimensions(python_function: str) -> dict | None:
+    """
+    Parse a kpi_python_function / map_python_function string to:
+    1. Extract the GROUP BY column list
+    2. Replace the GROUP BY line with a placeholder comment
 
-def _get_bkg() -> BKGTool:
-    global _bkg
-    if _bkg is None:
-        _bkg = BKGTool()
-    return _bkg
+    Returns dict with extracted info, or None if no GROUP BY found / parse fails.
+    """
+    if not python_function or not isinstance(python_function, str):
+        return None
+
+    # Match GROUP BY line in SQL (handles f-string, multi-line SQL contexts)
+    pattern = r'(GROUP\s+BY\s+)([\w\s,\.]+?)(\s*(?:\n|"""|\'\'\'|\)|$))'
+    match = re.search(pattern, python_function, re.IGNORECASE)
+    if not match:
+        return None
+
+    raw_columns = match.group(2)
+    dimensions = [col.strip() for col in raw_columns.split(",") if col.strip()]
+    if not dimensions:
+        return None
+
+    placeholder = "-- GROUP BY: <SELECT from available_dimensions based on your sub-query granularity>"
+    modified_function = (
+        python_function[:match.start()]
+        + placeholder
+        + python_function[match.end():]
+    )
+
+    return {
+        "available_dimensions": dimensions,
+        "modified_function": modified_function,
+    }
 
 
 # ─────────────────────────────────────────────
@@ -189,11 +208,18 @@ def _get_bkg() -> BKGTool:
 @tool
 def run_cypher(query: str) -> str:
     """Execute a read-only Cypher query against the Neo4j Business Knowledge Graph.
-    Use this for custom queries when the higher-level BKG tools don't cover your needs.
-    Returns JSON with 'status', 'records', 'count', and 'elapsed_ms'.
-    Only READ operations are allowed — no CREATE, MERGE, DELETE, SET, or REMOVE.
-    All nodes use the BKGNode label with node_id property. Relationships use RELATES_TO
-    with relationship_type property.
+
+    USE WHEN: You need a custom query that the higher-level tools (find_relevant,
+    get_node, traverse_graph, get_kpi) cannot handle — e.g., aggregations across
+    multiple node types or filtering by specific property values.
+
+    IMPORTANT:
+    - All nodes use the `BKGNode` label with a `node_id` property.
+    - Use `entity_type` to filter: 'core', 'context', 'transaction', 'reference', 'kpi'.
+    - Relationships are `RELATES_TO` edges with a `relationship_type` property.
+    - Only READ operations are allowed (no CREATE, MERGE, DELETE, SET, REMOVE).
+
+    RETURNS: JSON with 'status', 'records', 'count', and 'elapsed_ms'.
     """
     result = neo4j_tool.run_cypher_safe(query)
     return _truncate_tool_output("run_cypher", json.dumps(result, default=str))
@@ -205,26 +231,70 @@ def run_cypher(query: str) -> str:
 
 @tool
 def get_node(node_id: str) -> str:
-    """Fetch a single BKGNode from the Knowledge Graph by its node_id.
-    Returns all properties plus incoming and outgoing relationships.
-    Supports aliases like 'GC' for general_contractor, 'NAS' for nas_session, etc.
-    If the node has a map_python_function, its GROUP BY is replaced with a
-    placeholder — check available_dimensions to choose the right granularity.
-    Use this when you know the exact node you want to inspect.
+    """⚠️ MANDATORY: After calling this tool, you MUST call run_sql_python. No exceptions.
+
+    FALLBACK — Returns node metadata ONLY — NOT actual data. You MUST follow up with
+    run_sql_python to get real numbers.
+
+    ONLY VALID SEQUENCE: get_node → run_sql_python → write findings.
+    INVALID: get_node → write findings (this is a FAILED traversal).
+
+    The map_python_function is a REFERENCE for table names, columns, joins, and logic.
+    DO NOT copy it verbatim — adapt it to your specific sub-query (drop unneeded columns,
+    adjust GROUP BY / WHERE / aggregations to match what was asked).
+
+    USE ONLY WHEN: get_kpi did not return adequate logic/formulas for your query,
+    and you need the core node's map_* properties (map_table_name, map_python_function,
+    map_contract, map_key_column, map_label_column, map_database_name).
+
+    Returns: node_id, name, label, entity_type, definition, nl_description,
+    map_* properties, plus outgoing and incoming relationships.
+    Supports aliases: 'GC' → general_contractor, 'BOM' → bill_of_materials, etc.
     """
     result = _get_bkg().query({"mode": "get_node", "node_id": node_id})
-    result = _process_python_functions(result)
-    return _truncate_tool_output("get_node", json.dumps(result, default=str))
+
+    if isinstance(result, dict):
+        # Decompose map_python_function: same treatment as kpi_python_function.
+        map_func = result.get("map_python_function")
+        if map_func:
+            extracted = _extract_group_by_dimensions(map_func)
+            if extracted:
+                result["map_python_function"] = extracted["modified_function"]
+                result["⚠️_GROUP_BY_DECISION"] = {
+                    "available_dimensions": extracted["available_dimensions"],
+                    "instruction": (
+                        "You MUST choose which of these dimensions to GROUP BY "
+                        "based on your sub-query's requested granularity. "
+                        "Do NOT include all dimensions by default — only those "
+                        "the sub-query explicitly asks to break down by. "
+                        "If the sub-query asks for an overall total, use NO GROUP BY."
+                    ),
+                }
+
+        result["⚠️_MANDATORY_NEXT_ACTION"] = (
+            "1. Read ⚠️_GROUP_BY_DECISION and select ONLY the dimensions your sub-query needs. "
+            "2. Use map_python_function as REFERENCE for table names, column names, and logic. "
+            "3. Write a TAILORED query in run_sql_python — do NOT copy the function verbatim."
+        )
+        result["_data_type"] = "metadata_only — NOT real data"
+        result["_traversal_status"] = "INCOMPLETE — requires run_sql_python to finish"
+
+    return json.dumps(result, default=str)
 
 
 @tool
 def find_relevant(question: str) -> str:
-    """Keyword search across all BKGNodes in the Knowledge Graph.
-    Searches across node_id, name, label, definition, nl_description, entity_type,
-    kpi_name, kpi_description, and kpi_formula_description fields.
-    Returns up to 10 nodes ranked by relevance score, with entity_type indicating
-    whether each is a core, context, transaction, reference, or kpi node.
-    Use this as your FIRST tool when you don't know which nodes to look at.
+    """Keyword search across all BKGNode nodes — use ONLY when the KG schema
+    doesn't reveal the right nodes for your query.
+
+    The schema already lists all nodes and relationships. Check it FIRST.
+    Only call this if the query uses terms that don't match any node_id or label.
+
+    SEARCHES: node_id, name, label, definition, nl_description, entity_type,
+    kpi_name, kpi_description.
+
+    RETURNS: Up to 10 nodes ranked by relevance, with node_id, entity_type,
+    definition, and neighbor preview.
     """
     result = _get_bkg().query({"mode": "find_relevant", "question": question})
     return _truncate_tool_output("find_relevant", json.dumps(result, default=str))
@@ -232,13 +302,20 @@ def find_relevant(question: str) -> str:
 
 @tool
 def traverse_graph(start: str, depth: int = 2, rel_type: Optional[str] = None) -> str:
-    """Walk the Knowledge Graph starting from a BKGNode, following RELATES_TO
-    relationships up to a given depth (1-4). Optionally filter by relationship_type
-    property on the edges.
-    Returns discovered paths and node details (label, entity_type, definition,
-    map_table_name, kpi_name).
-    Use this to explore the neighborhood of a concept — e.g., to find what tables,
-    KPIs, or related entities connect to a starting node.
+    """Walk the Knowledge Graph from a starting node, following relationships up to
+    a given depth (1-4). Optionally filter by relationship_type.
+
+    USE WHEN: You need to explore what connects to a node — e.g., find related
+    tables, KPIs, or entities that are linked through the graph.
+
+    PARAMETERS:
+    - start: node_id to start from (aliases like 'GC' are resolved automatically)
+    - depth: how many hops to traverse (1-4, default 2)
+    - rel_type: optional filter — only follow edges with this relationship_type
+      (e.g., 'COMPUTES_FROM', 'SUPPLIES', 'HAS_PREREQUISITE')
+
+    RETURNS: paths (from → relationship → to) and discovered_nodes with their
+    entity_type, label, definition, map_table_name, and kpi_name.
     """
     req: dict = {"mode": "traverse", "start": start, "depth": depth}
     if rel_type:
@@ -249,17 +326,61 @@ def traverse_graph(start: str, depth: int = 2, rel_type: Optional[str] = None) -
 
 @tool
 def get_kpi(node_id: str) -> str:
-    """Get detailed information about a KPI node including its definition,
-    formula description, business logic, Python function, source tables/columns,
-    dimensions, filters, output schema, and related core nodes.
-    The python function's GROUP BY is replaced with a placeholder — check
-    available_dimensions to choose the right granularity for your query.
-    Use this when you need to understand how a KPI metric is computed or what drives it.
-    If called on a non-KPI node, returns KPIs that reference that node.
+    """⚠️ MANDATORY: After calling this tool, you MUST call run_sql_python. No exceptions.
+
+    Returns KPI metadata ONLY — NOT actual data. You MUST follow up with run_sql_python
+    to get real numbers.
+
+    ONLY VALID SEQUENCE: get_kpi → run_sql_python → write findings.
+    INVALID: get_kpi → write findings (this is a FAILED traversal).
+
+    The kpi_python_function is a REFERENCE for table names, columns, joins, and logic.
+    DO NOT copy it verbatim — adapt it to your specific sub-query (drop unneeded columns,
+    adjust GROUP BY / WHERE / aggregations to match what was asked).
+
+    KPI nodes contain:
+    - What it measures (kpi_description, kpi_formula_description)
+    - How to compute it (kpi_business_logic, kpi_python_function)
+    - What data it needs (kpi_source_tables, kpi_source_columns, kpi_dimensions)
+    - How to filter it (kpi_filters)
+    - What it outputs (kpi_output_schema)
+    - Its function contract (kpi_contract)
+    - Related core node IDs and their table mappings
+
+    If the node_id is a core/context node (not a KPI), returns all KPI nodes
+    that reference or compute from it.
     """
     result = _get_bkg().query({"mode": "get_kpi", "node_id": node_id})
-    result = _process_python_functions(result)
-    return _truncate_tool_output("get_kpi", json.dumps(result, default=str))
+
+    if isinstance(result, dict):
+        # Decompose kpi_python_function: extract GROUP BY dimensions,
+        # replace the GROUP BY line with a placeholder so the agent
+        # cannot blindly copy it — must actively select dimensions.
+        kpi_func = result.get("kpi_python_function")
+        if kpi_func:
+            extracted = _extract_group_by_dimensions(kpi_func)
+            if extracted:
+                result["kpi_python_function"] = extracted["modified_function"]
+                result["⚠️_GROUP_BY_DECISION"] = {
+                    "available_dimensions": extracted["available_dimensions"],
+                    "instruction": (
+                        "You MUST choose which of these dimensions to GROUP BY "
+                        "based on your sub-query's requested granularity. "
+                        "Do NOT include all dimensions by default — only those "
+                        "the sub-query explicitly asks to break down by. "
+                        "If the sub-query asks for an overall total, use NO GROUP BY."
+                    ),
+                }
+
+        result["⚠️_MANDATORY_NEXT_ACTION"] = (
+            "1. Read ⚠️_GROUP_BY_DECISION and select ONLY the dimensions your sub-query needs. "
+            "2. Use kpi_python_function as REFERENCE for table names, column names, and logic. "
+            "3. Write a TAILORED query in run_sql_python — do NOT copy the function verbatim."
+        )
+        result["_data_type"] = "metadata_only — NOT real data"
+        result["_traversal_status"] = "INCOMPLETE — requires run_sql_python to finish"
+
+    return json.dumps(result, default=str)
 
 
 # ─────────────────────────────────────────────
@@ -269,11 +390,23 @@ def get_kpi(node_id: str) -> str:
 @tool
 def run_python(code: str) -> str:
     """Execute Python code in a sandboxed environment for calculations.
-    Available modules: math, json, statistics, collections, datetime, itertools, functools.
-    Set a variable named 'result' to return structured data.
-    Print statements will be captured as 'output'.
-    Use this for arithmetic, aggregations, data transformations, or any computation
-    that should not be done in your head.
+
+    USE WHEN: You need to perform arithmetic, aggregations, data transformations,
+    or any computation that must NOT be done in your head.
+
+    AVAILABLE: math, json, statistics, collections, datetime, itertools, functools,
+    numpy (as np), pandas (as pd).
+
+    RULES:
+    - Set `result = <value>` at the end to return data. A bare variable name does
+      NOT return data.
+    - Print statements are captured as 'output'.
+    - On error: read the FULL 'error' and 'traceback' fields carefully, diagnose
+      the root cause, fix your code, and call this tool again with corrected code.
+      You may retry up to 3 times total — each retry must have a meaningful fix.
+
+    RETURNS: JSON with 'status', 'output' (stdout), 'result' (your result variable),
+    and 'elapsed_ms'. On error: 'error' and 'traceback' fields.
     """
     result = execute_python(code)
     return _truncate_tool_output("run_python", json.dumps(result, default=str))
@@ -281,13 +414,32 @@ def run_python(code: str) -> str:
 
 @tool
 def run_sql_python(code: str, timeout_seconds: int = 30) -> str:
-    """Execute Python code with access to a PostgreSQL database connection.
-    Pre-imported: conn (psycopg2 read-only), pd (pandas), np (numpy),
+    """Execute Python code with access to a read-only PostgreSQL database connection.
+
+    USE WHEN: You need to query the PostgreSQL database for actual operational data.
+    The Neo4j Knowledge Graph describes the data MODEL; this tool queries the
+    actual DATA.
+
+    PRE-IMPORTED: conn (psycopg2 read-only), pd (pandas), np (numpy),
     go (plotly.graph_objects), px (plotly.express), json,
-    execute_query (helper: execute_query(sql) -> list[dict]).
-    Set result = {...} to return data. DataFrames are auto-converted to records.
-    Use this when you need to query PostgreSQL for actual operational data
-    (as opposed to the Neo4j Knowledge Graph which describes the data model).
+    execute_query(sql, db=None, max_rows=None) → list[dict].
+
+    CRITICAL RULES:
+    1. INDENTATION: All top-level code MUST start at column 0 (no leading spaces).
+       Mixed indentation causes `IndentationError` / `unexpected indent`.
+    2. ALWAYS prefix tables: pwc_macro_staging_schema.<table_name>
+    3. Use the pre-injected execute_query(sql) to run SQL — it returns list[dict].
+       Alternatively use pd.read_sql("SELECT ...", conn) for DataFrames.
+       Do NOT redefine execute_query yourself.
+    4. Set `result = <value>` to return data. DataFrames are auto-converted.
+    5. NEVER pass None as a value in df.fillna() — it is invalid and raises an error.
+       Only fill with concrete values (0, '', etc.). To keep NaN/None as-is, simply
+       omit those columns from the fillna dict.
+    6. On error: read the FULL 'error' fields carefully, diagnose
+       the root cause, fix your code, and call this tool again with corrected code.
+       You may retry up to 3 times total — each retry must have a meaningful fix.
+
+    RETURNS: JSON with 'status' and 'result'. On error: 'error' and 'traceback'.
     """
     sandbox = PythonSandbox()
     result = sandbox.execute(code, timeout_seconds)
@@ -370,13 +522,36 @@ def _make_filtered_run_sql_python(project_type: str) -> StructuredTool:
 
     @tool
     def run_sql_python_filtered(code: str, timeout_seconds: int = 30) -> str:
-        """Execute Python code with access to a PostgreSQL database connection.
-        Pre-imported: conn (psycopg2 read-only), pd (pandas), np (numpy),
+        """Execute Python code with access to a read-only PostgreSQL database connection.
+
+        USE WHEN: You need to query the PostgreSQL database for actual operational data.
+        The Neo4j Knowledge Graph describes the data MODEL; this tool queries the
+        actual DATA.
+
+        PRE-IMPORTED: conn (psycopg2 read-only), pd (pandas), np (numpy),
         go (plotly.graph_objects), px (plotly.express), json,
-        execute_query (helper: execute_query(sql) -> list[dict]).
-        Set result = {...} to return data. DataFrames are auto-converted to records.
-        Use this when you need to query PostgreSQL for actual operational data
-        (as opposed to the Neo4j Knowledge Graph which describes the data model).
+        execute_query(sql, db=None, max_rows=None) → list[dict].
+
+        CRITICAL RULES:
+        1. INDENTATION: All top-level code MUST start at column 0 (no leading spaces).
+           Mixed indentation causes `IndentationError` / `unexpected indent`.
+        2. ALWAYS prefix tables: pwc_macro_staging_schema.<table_name>
+        3. Use the pre-injected execute_query(sql) to run SQL — it returns list[dict].
+           Alternatively use pd.read_sql("SELECT ...", conn) for DataFrames.
+           Do NOT redefine execute_query yourself.
+        4. Set `result = <value>` to return data. DataFrames are auto-converted.
+        5. NEVER pass None as a value in df.fillna() — it is invalid and raises an error.
+           Only fill with concrete values (0, '', etc.). To keep NaN/None as-is, simply
+           omit those columns from the fillna dict.
+        6. PROJECT-TYPE FILTER: If your SQL references the macro_combined table,
+           the smp_name filter is validated BEFORE execution. Make sure to include
+           the correct filter for the user's selected project type. A wrong or
+           missing filter is rejected with an error and you must retry.
+        7. On error: read the FULL 'error' fields carefully, diagnose
+           the root cause, fix your code, and call this tool again with corrected code.
+           You may retry up to 3 times total — each retry must have a meaningful fix.
+
+        RETURNS: JSON with 'status' and 'result'. On error: 'error' and 'traceback'.
         """
         # Validate filter before execution
         err = _check_macro_combined_filter(code, project_type)
@@ -397,7 +572,7 @@ def _make_filtered_run_sql_python(project_type: str) -> StructuredTool:
 # ─────────────────────────────────────────────
 
 def get_all_tools(project_type: str = "") -> list:
-    """Return all tools for the traversal agent.
+    """Return all tools for the traversal agent, ordered by KPI-first priority.
     When project_type is set, run_sql_python gets filter validation."""
     sql_tool = (
         _make_filtered_run_sql_python(project_type)
@@ -405,21 +580,21 @@ def get_all_tools(project_type: str = "") -> list:
         else run_sql_python
     )
     return [
-        run_cypher,
+        get_kpi,
         get_node,
         find_relevant,
         traverse_graph,
-        get_kpi,
-        run_python,
         sql_tool,
+        run_python,
+        run_cypher,
     ]
 
 
 def get_fast_tools(project_type: str = "") -> list:
-    """Minimal tool set for the traversal agent.
+    """Minimal tool set for the fixed-step traversal protocol.
 
-    Removes find_relevant (schema is in prompt), traverse_graph (never needed
-    when schema is embedded), and run_cypher (run_sql_python covers all cases).
+    Removes find_relevant (schema is in prompt), traverse_graph (never used
+    in logs), and run_cypher (run_sql_python covers all cases).
     Smaller decision surface = faster LLM reasoning per round trip.
     """
     sql_tool = (
