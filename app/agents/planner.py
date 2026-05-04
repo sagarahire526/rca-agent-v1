@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import warnings
+from datetime import date as _date
 from typing import Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -139,7 +140,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         logger.warning("Semantic search in planner failed (non-fatal): %s", e)
 
     # ── Step 2: LLM creates the investigation plan ──
-    provider = LLMProvider(model="gpt-5", reasoning_effort="medium")
+    provider = LLMProvider(model="gpt-5", reasoning_effort="low")
     llm = provider.get_llm()
 
     safe_kg_schema = kg_schema.replace("{", "{{").replace("}", "}}")
@@ -149,6 +150,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     planning_prompt = PLANNER_SYSTEM.format(
         kg_schema=safe_kg_schema,
         semantic_context=safe_semantic,
+        today_date=_date.today().isoformat(),
     )
 
     llm_response = llm.invoke([
