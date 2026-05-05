@@ -118,6 +118,56 @@ using these sources together:
 - Prefer 3–5 steps for a typical RCA query
 - Only use 6–7 steps for complex multi-dimension or multi-region investigations
 
+## Workfront KPI — Pipeline Funnel Awareness
+The **Workfront** KPI (the system's source of truth for site/project completion status) \
+returns a 10-stage milestone funnel rather than a single completed/not-completed count. \
+When the user names a specific stage in the RCA (e.g. "investigate why sites are stuck \
+at cx_complete" or "why are integrations slipping"), target ONLY that stage in the \
+relevant sub-query — do NOT plan a step that pulls all 10 stages when one is asked for.
+
+**Stages (in order — earlier → later):**
+1. `precon`               — pre-construction package validated
+2. `material_picked`      — tower materials picked up
+3. `tower_ntp`            — construction NTP accepted by GC
+4. `civil_start`          — civil construction start *(optional for some projects)*
+5. `civil_complete`       — civil construction complete *(optional for some projects)*
+6. `tower_work_start`     — construction start (tower work)
+7. `tower_work_complete`  — construction complete (a.k.a. **cx_complete** / "construction complete")
+8. `integration`          — all planned technologies integrated
+9. `scop_submission`      — close-out / punch checklist submitted
+10. `scop_approval`       — close-out approved by T-Mobile
+
+For each stage X, Workfront exposes `reached_X` (count that reached the stage) and \
+`stuck_at_X` (reached X but not the next stage). It also returns `total_entitled` \
+(the funnel denominator).
+
+**User vocabulary → stage mapping (resolve when planning steps):**
+- "cx complete" / "cx_complete" / "construction complete" → `tower_work_complete`
+- "cx start" / "construction start" → `tower_work_start`
+- "civil start" / "civil complete" → `civil_start` / `civil_complete`
+- "ntp" / "tower ntp" → `tower_ntp`
+- "material pickup" / "MSL pickup" → `material_picked`
+- "integration done" / "integration backlog" → `integration`
+- "scop submitted" / "close-out submitted" → `scop_submission`
+- "scop approved" / "close-out approved" → `scop_approval`
+
+**Step phrasing rules for Workfront-backed steps in RCA:**
+- If the user names a specific stage (e.g. "why are sites stuck at cx_complete in SOUTH"), \
+the sub-query must say "count of sites **stuck at <stage>**" (for backlog/RCA at that stage) \
+or "count of sites that **reached <stage>**" (when quantifying flow into a stage). Do NOT \
+request the full 10-stage funnel.
+- For RCA queries about a backlog or pipeline bottleneck, prefer `stuck_at_<stage>` over \
+`reached_<stage>` — the stuck count is what the investigation is about.
+- If the user asks about "completed / not completed" without naming a stage, default \
+to `tower_work_complete` (cx_complete) as the completion stage.
+- Always carry the user's filters (region, market, GC, date range, smp_name) into the \
+Workfront sub-query.
+
+**Available Workfront filters** (use only what the user specified — do NOT invent values):
+- Equality: `rgn_region`, `m_area`, `m_market`, `construction_gc`, `por_category`, \
+`pj_project_id`, `s_site_id`, `smp_name`
+- Date range (on entitlement-complete date): `start_date`, `end_date`
+
 ## Output Format
 Respond with ONLY a valid JSON object — no markdown fences, no extra text.
 
