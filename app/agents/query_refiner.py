@@ -153,17 +153,36 @@ def query_refiner_node(state: RCAState) -> dict[str, Any]:
 
     # ── Graph resumed with user's clarification ──
     if user_clarification and user_clarification.strip():
-        print(f"  {_GREEN}OK Clarification received — re-invoking LLM to resolve entities.{_RESET}", flush=True)
+        clar_text = user_clarification.strip()
+        is_skip_signal = clar_text.lower() == "accept stated assumptions"
 
-        combined_query = (
-            f"{user_query} — Additional context: {user_clarification.strip()}"
-        )
+        if is_skip_signal:
+            print(f"  {_GREEN}OK User accepted assumptions — defaulting geography to ALL regions.{_RESET}", flush=True)
+            combined_query = (
+                f"{user_query} — Additional context: User has accepted the proposed "
+                f"assumptions instead of answering the geography question. If geography "
+                f"(market/region) was the missing piece, default the scope to ALL regions "
+                f"(WEST, SOUTH, CENTRAL) — do NOT pick a single region. Mark is_complete=true "
+                f"and write the refined_query to explicitly say "
+                f"'across all regions (WEST, SOUTH, CENTRAL)'."
+            )
+        else:
+            print(f"  {_GREEN}OK Clarification received — re-invoking LLM to resolve entities.{_RESET}", flush=True)
+            combined_query = f"{user_query} — Additional context: {clar_text}"
+
         resume_response = llm.invoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=combined_query),
         ])
         resume_parsed = _parse_refiner_response(resume_response.content)
         refined_query = resume_parsed.get("refined_query", combined_query) or combined_query
+
+        # Deterministic safety net: even if the LLM ignores the directive, ensure the
+        # all-regions scope is explicit when the user accepted assumptions.
+        if is_skip_signal and "all regions" not in refined_query.lower():
+            refined_query = (
+                f"{refined_query.rstrip('. ?')} — across all regions (WEST, SOUTH, CENTRAL)"
+            )
 
         print(f"  {_GREEN}Refined query after clarification:{_RESET}", flush=True)
         print(f"     {refined_query}\n", flush=True)

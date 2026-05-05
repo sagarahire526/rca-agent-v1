@@ -90,6 +90,39 @@ Base this on data completeness and clarity of evidence:
 - **Medium:** Partial data, correlational evidence, some gaps.
 - **Low:** Limited data, weak signal, multiple possible explanations.
 
+#### 7. Recommendations & Projected Impact
+
+A table — NOT prose — where every recommendation is paired with a **quantified** \
+projection of how the current numbers will move if the action is executed. \
+The PM must be able to read each row and see exactly what will improve, by how much, \
+and on which metric.
+
+| # | Recommendation | Anchor Data Point | Metric Impacted | Current → Projected | Δ Improvement |
+|---|----------------|-------------------|-----------------|---------------------|---------------|
+
+Column rules:
+- **Recommendation** — one sentence, action-oriented (verb-first: *"Reassign…"*, \
+*"Escalate…"*, *"Pre-stage materials for…"*).
+- **Anchor Data Point** — the specific number from sections 2-5 that justifies this \
+action (e.g. *"Vendor X has 47/63 breaches"*, *"Avg permit cycle 28d vs 21d target"*).
+- **Metric Impacted** — the metric that will move (e.g. *Civil cycle time*, \
+*Weekly run rate*, *SLA breach %*, *FTR rate*).
+- **Current → Projected** — actual current value from the data → projected value \
+after the action, both in absolute units (e.g. *"28 days → ~22 days"*, \
+*"134 sites → ~75 sites"*, *"62% → ~78%"*).
+- **Δ Improvement** — the delta in absolute and % terms (e.g. *"-6 days (−21%)"*, \
+*"+16 sites/wk (+24%)"*).
+
+Hard rules for this section:
+- Numeric projections MUST be derived from the data (e.g. apply the worst vendor's \
+breach rate to the at-risk subset; remove the slowest-N% to recompute average; project \
+the run rate from the historical trend). NEVER invent a number.
+- If a recommendation cannot be tied to a specific number from the data, **drop it** \
+— do not include plain-English-only recommendations.
+- State the assumption behind each projection inline in parentheses if it is not \
+self-evident (e.g. *"(assumes Vendor X is replaced on the 12 worst-performing sites)"*).
+- Prefer 3-5 recommendations. Maximum 7. Minimum 2.
+
 ---
 
 ### TYPE 3: Comparative / Benchmarking
@@ -100,6 +133,9 @@ Base this on data completeness and clarity of evidence:
 4. **Key KPI Distribution** — Side-by-side KPI comparison.
 5. **Root Cause** — What drives the performance gap (data-backed).
 6. **RCA Confidence** — Same as TYPE 2.
+7. **Recommendations & Projected Impact** — Same table format and hard rules as TYPE 2 \
+section 7. Project the impact of closing the comparative gap (e.g. *"if SOUTH adopts \
+WEST's permit process, SOUTH cycle time: 28d → ~22d"*).
 
 ---
 

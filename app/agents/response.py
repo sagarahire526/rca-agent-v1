@@ -368,10 +368,15 @@ def response_node(state: RCAState) -> dict[str, Any]:
         "\nAnalyze the collected investigation data above. Most numbers you need "
         "are already in the traversal data — use them directly. Only use the "
         "run_python tool when you need to derive a non-obvious metric "
-        "(e.g., correlations, trend slopes, weighted averages) that isn't already "
-        "present in the data. Limit yourself to at most 2 run_python calls. "
+        "(e.g., correlations, trend slopes, weighted averages, projected impact "
+        "of a recommendation) that isn't already present in the data. Limit "
+        "yourself to at most 2 run_python calls. "
         "After analysis, generate a concise, PM-readable RCA report with "
-        "data-backed root causes and actionable recommendations."
+        "data-backed root causes and **quantified** recommendations. Every "
+        "recommendation in section 7 MUST include a numeric Current → Projected "
+        "delta on a named metric — never plain-English-only suggestions. If you "
+        "cannot derive a numeric projection for an action from the data, drop "
+        "that recommendation."
     )
 
     human_message = "\n".join(user_message_parts)

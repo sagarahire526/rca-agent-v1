@@ -99,6 +99,36 @@ Exceptions that are always complete (no geography needed):
   - Greetings ("hi", "hello", "thanks")
   - Questions about how the system works
 
+## Geography Hierarchy & Skip-Default Rule
+The geography hierarchy is **REGION → MARKET → AREA** (region is broadest, area is \
+narrowest). When you mark `is_complete = false` because some level of geography is \
+missing, you MUST populate `assumptions` and `refined_query` with the **explicit \
+skip-default at the missing level** — never leave the scope ambiguous and never pick \
+a single child to "fill in" the gap.
+
+Apply the rule that matches what's already in the user's query:
+
+| What user gave | What's missing | Skip-default scope (what to write into refined_query) |
+|----------------|----------------|--------------------------------------------------------|
+| Nothing | Region | "across all regions (WEST, SOUTH, CENTRAL)" |
+| A region (e.g. "SOUTH") | Market within that region | "across all markets in SOUTH region" |
+| A market (e.g. "CHICAGO") | Area within that market | "across all areas in CHICAGO market" |
+
+Rules:
+- `assumptions` MUST contain a line stating the explicit skip-default that would apply \
+at the missing level, e.g. *"If you skip the question and accept assumptions, scope \
+will default to ALL markets in SOUTH region — not a single market."*
+- `refined_query` MUST end with the explicit fallback scope so downstream agents do \
+not have to guess. Use the matching phrase from the table above.
+- NEVER write *"(market TBD)"*, *"(area TBD)"*, or any "TBD" placeholder — that causes \
+downstream agents to silently default to a single child entity.
+- NEVER pick one child entity (e.g. just CENTRAL when the user said nothing, or just \
+DALLAS when the user said "SOUTH") as a substitute for "all" — the skip-default is \
+always the full sibling set at that level.
+
+This rule applies ONLY when geography is the missing piece. Other ambiguities \
+(timeframe, vendor scope, etc.) should still be resolved per the existing examples.
+
 ## Examples
 
 User: "Which region has the most site delays?"
@@ -108,7 +138,13 @@ User: "Compare vendor SLA performance across markets"
 → {"is_complete": true, "clarification_questions": [], "assumptions": ["Cross-market comparison — all markets included"], "refined_query": "Compare vendor SLA performance across all markets."}
 
 User: "What is the current site status?"
-→ {"is_complete": false, "clarification_questions": ["Which market or region?"], "assumptions": [], "refined_query": "What is the current site status? (market TBD)"}
+→ {"is_complete": false, "clarification_questions": ["Which market or region?"], "assumptions": ["If you skip the question and accept assumptions, scope will default to ALL regions (WEST, SOUTH, CENTRAL) — not a single region."], "refined_query": "What is the current site status across all regions (WEST, SOUTH, CENTRAL)?"}
+
+User: "Show site delays in SOUTH region — drill down to a market"
+→ {"is_complete": false, "clarification_questions": ["Which market within SOUTH region?"], "assumptions": ["If you skip the question and accept assumptions, scope will default to ALL markets in SOUTH region — not a single market."], "refined_query": "Show site delays across all markets in SOUTH region."}
+
+User: "Investigate H&S non-compliance in CHICAGO market — by area"
+→ {"is_complete": false, "clarification_questions": ["Which area within CHICAGO market?"], "assumptions": ["If you skip the question and accept assumptions, scope will default to ALL areas in CHICAGO market — not a single area."], "refined_query": "Investigate H&S non-compliance across all areas in CHICAGO market."}
 
 User: "Why are sites delayed in the Chicago market?"
 → {"is_complete": true, "clarification_questions": [], "assumptions": ["Delay root causes and GC performance data will be retrieved from the database"], "refined_query": "Investigate the root causes of site delays in the Chicago market."}
