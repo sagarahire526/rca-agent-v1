@@ -22,7 +22,6 @@ from models.state import RCAState
 from services.llm_provider import LLMProvider
 from agents.traversal import atraversal_node
 from services.semantic_service import get_semantic_service
-from tools.neo4j_tool import neo4j_tool
 from prompts.planner_prompt import PLANNER_SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -96,18 +95,11 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     """
     LangGraph node: Planner Agent for RCA.
 
-    Reads:  refined_query, kg_schema, max_traversal_steps
+    Reads:  refined_query, max_traversal_steps
     Writes: planner_steps, planner_step_results,
             rca_scenario_guidance, current_phase, messages
     """
     refined_query = state.get("refined_query") or state["user_query"]
-    table_list = state.get("kg_schema", "")  # discover_schema now stores table list only
-    try:
-        full_neo4j_schema = neo4j_tool.get_schema()
-        kg_schema = full_neo4j_schema + table_list
-    except Exception as e:
-        logger.warning("Neo4j schema fetch in planner failed (non-fatal): %s", e)
-        kg_schema = table_list or "Schema not available"
 
     print(f"\n{_BOLD}{'=' * 70}")
     print(f"  PLANNER AGENT — Decomposing RCA query into investigation steps")
@@ -140,15 +132,12 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         logger.warning("Semantic search in planner failed (non-fatal): %s", e)
 
     # ── Step 2: LLM creates the investigation plan ──
-    provider = LLMProvider(model="gpt-5", reasoning_effort="low")
+    provider = LLMProvider(model="gpt-5", reasoning_effort="medium")
     llm = provider.get_llm()
 
-    safe_kg_schema = kg_schema.replace("{", "{{").replace("}", "}}")
     safe_semantic = semantic_context.replace("{", "{{").replace("}", "}}")
 
-    print(f"safe knowledge graph schema is : {safe_kg_schema}")
     planning_prompt = PLANNER_SYSTEM.format(
-        kg_schema=safe_kg_schema,
         semantic_context=safe_semantic,
         today_date=_date.today().isoformat(),
     )

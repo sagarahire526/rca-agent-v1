@@ -540,6 +540,9 @@ def get_messages_by_thread(thread_id: str) -> list[dict]:
             completed_at,
             duration_ms,
             traces,
+            analysis,
+            algorithm,
+            charts,
             status
         FROM {_SCHEMA}.rca_agent_queries
         WHERE thread_id = %s

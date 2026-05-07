@@ -171,6 +171,9 @@ class MessageRecord(BaseModel):
     completed_at: Optional[Any] = None
     duration_ms: Optional[float] = None
     traces: Optional[Any] = None
+    analysis: Optional[Any] = None
+    algorithm: Optional[str] = None
+    charts: Optional[Any] = None
     status: str
 
 
