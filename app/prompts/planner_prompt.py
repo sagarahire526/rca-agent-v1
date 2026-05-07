@@ -83,29 +83,47 @@ retrieval; the response agent will read off "most responsible" from the rank.
 rather than a verb that asks for *data* (retrieve / count / fetch / list / compute on \
 one KPI / break down by) — rewrite it or drop it.
 
-2. **One retrieval target per step.** When the user names multiple distinct metrics, KPIs, \
-or quantities, give each one its OWN step. The Traversal Agent fetches via embedding \
-similarity — when a step bundles N distinct metrics into one phrase, the embedding can \
-only match one of them well, and the other N-1 get under-fetched or missed entirely.
+2. **Split by metric, NOT by grouping.** This rule has two halves — read both:
+
+   **(a) Different metrics → different steps.** When the user names multiple distinct \
+metrics, KPIs, or quantities, give each one its OWN step. The Traversal Agent fetches \
+via embedding similarity — when a step bundles N distinct metrics into one phrase, the \
+embedding can only match one of them well, and the other N-1 get under-fetched or \
+missed entirely.
+
+   **(b) Same metric, multiple groupings or sort orders → ONE step. Do NOT split.** \
+Once the embedding has matched a KPI, "by region", "by vendor", "by region AND by \
+vendor", "ranked worst to best", "top 5", "above target" are all parameters on the \
+SAME retrieval. Splitting them creates redundant DB calls that fetch the same KPI \
+twice — pure waste, no incremental data.
 
    **Distinguish carefully:**
    - Multiple **metrics** named by the user (e.g., "FTR, revisit rate, and customer \
 rejections") → **separate steps, one per metric.**
-   - Multiple **groupings** of the same metric (e.g., "FTR by region and by vendor") → \
-**one step is fine** — the dimensions go in the same retrieval.
+   - Multiple **groupings of the same metric** (e.g., "FTR by region and by vendor", or \
+"FTR by region AND ranked by vendor within region") → **MUST stay in one step.** Pack \
+all groupings/orderings into that single step's phrasing.
    - Multiple **aggregations of the same underlying retrieval** (e.g., "count + % + \
-average overrun" for a single breach metric) → **one step is fine** — they all derive \
-from the same KPI's data.
+average overrun" for a single breach metric) → **one step.** They derive from the same \
+KPI's data.
+
+   **Anti-pattern to avoid (this is what bloats step counts):** writing Step N "Retrieve \
+FTR % by region" and Step N+1 "Retrieve FTR % by vendor within region". Same metric, \
+two groupings → MERGE into one step: *"Retrieve FTR % broken down by region AND by \
+vendor/GC within region"*.
 
    **Self-test before writing each step:** "Can this step be summarised as ONE \
-measurement + filters + optional grouping(s)?" If yes → keep as one step. If you find \
-yourself writing "and", "as well as", or a comma-separated list of metric names in one \
-step → split it.
+measurement + filters + any number of groupings/orderings?" If yes → keep as one step. \
+**Before adding step N+1, scan the existing steps: if it names the SAME metric as any \
+prior step (just with a different grouping or sort order), STOP and merge it into the \
+prior step instead of adding a new one.**
 
    - Wrong: "Sub-query 1: Extract region-wise FTR %, Revisit Rate %, and Customer \
 Rejection %." — three distinct metrics bundled, traversal will only fetch one well.
-   - Right: three separate sub-queries, one per metric, each carrying the same filters \
-and grouping.
+   - Wrong: "Sub-query 1: FTR % by region. Sub-query 2: FTR % by vendor/GC." — same \
+metric split across two steps; redundant retrieval.
+   - Right: "Sub-query 1: Retrieve FTR % broken down by region AND by vendor/GC within \
+region, last 90 days from {today_date}." — one metric, all groupings packed in.
 
 3. **Stay in business language.** Phrase every step the way a deployment manager would ask \
 it. Never paste kpi_ids, node_ids, UUIDs, table names, or column names into step text. The \
@@ -278,26 +296,28 @@ This is wrong on two counts: (a) Step 1 bundles three distinct KPIs that need th
 separate embedding lookups; (b) Step 2 tries to rank across other steps' results, which \
 violates the self-contained rule (steps run in parallel and cannot see each other).
 
-**Right plan** (one metric per step; ranking/aggregation deferred to the response agent):
+**Right plan** (one step per metric; each step packs ALL groupings the response agent \
+will need; cross-metric ranking deferred to the response agent):
 {{
     "planning_rationale": "No high-similarity scenario match. The user named three \
 distinct quality metrics — FTR, Revisit Rate, and Customer Rejections — so each gets \
-its own step (Rule #2). A separate step pulls vendor-level quality signal to enable the \
-'corrective actions' part of the ask. Cross-metric ranking happens in the response \
-agent, not as a planner step.",
+its own step (Rule #2a). Each step packs BOTH groupings (region and vendor/GC within \
+region) into one retrieval (Rule #2b) — same KPI, no redundant DB calls. Cross-metric \
+ranking and 'corrective actions' happen in the response agent, not as planner steps.",
     "steps": [
-        "Sub-query 1: Retrieve FTR % broken down by region, last 90 days from {today_date}.",
-        "Sub-query 2: Retrieve Revisit Rate % broken down by region, last 90 days from {today_date}.",
-        "Sub-query 3: Retrieve Customer Rejection % broken down by region, last 90 days from {today_date}.",
-        "Sub-query 4: Retrieve the top vendors/GCs by combined quality issues (rework, \
-rejections, revisits) broken down by region, last 90 days from {today_date}, ranked \
-worst to best."
+        "Sub-query 1: Retrieve FTR % broken down by region AND by vendor/GC within \
+region, last 90 days from {today_date}, ranked worst to best per region.",
+        "Sub-query 2: Retrieve Revisit Rate % broken down by region AND by vendor/GC \
+within region, last 90 days from {today_date}, ranked worst to best per region.",
+        "Sub-query 3: Retrieve Customer Rejection % broken down by region AND by \
+vendor/GC within region, last 90 days from {today_date}, ranked worst to best per region."
     ]
 }}
 
-Notice: 4 steps. Each metric step retrieves ONE KPI grouped by region — the dimension \
-the user asked about. No "weighted-score ranking" step exists; that composition is the \
-response agent's job once it has all three metric tables.
+Notice: 3 steps total — one per metric, NOT one per (metric × grouping) pair. Each step \
+fetches one KPI with two groupings packed in. No separate "vendor breakdown" steps. No \
+"weighted-score ranking" step — that composition is the response agent's job once it \
+has all three metric tables.
 
 - **## Worked Example** is sample example for your reference DO NOT USE these steps blindly anywhere.
 """
