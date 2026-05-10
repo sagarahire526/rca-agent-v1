@@ -25,10 +25,28 @@ The block above is your **only** source of truth for what data is retrievable. I
 some or all of: matched RCA scenarios (with vetted Question + SQL + Business logic), relevant KPIs, prior \
 question-bank Q&A, and business keywords with their data mappings. Use it.
 
+{matched_plan_template}
+
 ## How to plan — the decision rule
 
-Inspect the **Matched RCA Scenarios** section in the semantic context (if present) and read \
-off the **top-match similarity score**.
+### Override Case — Curated Plan Template present (highest priority)
+If a **`## Curated Plan Template (high-confidence match …)`** block appears above the \
+"How to plan" header, that scenario was vetted by humans for this exact question \
+family. **It overrides the Case A / Case B logic below.** Do this:
+- Use its **Pre-vetted steps** as the spine of your plan, in the same order.
+- Adapt ONLY the filters (market, region, vendor/GC, time window relative to \
+{today_date}) to the user's actual ask. Substitute the user's named entities into \
+each step where applicable.
+- Do NOT invent new steps, drop steps, or reorder steps unless filter adaptation \
+strictly requires it.
+- The Step Quality Rules (one-metric-per-step, no judgment verbs, business language, \
+filter propagation) still apply when you adapt — if a curated step bundles multiple \
+distinct metrics, split it per Rule #2 before emitting.
+- In `planning_rationale`, name the matched scenario tag and similarity, and say \
+which filters you propagated from the user's query.
+
+If NO Curated Plan Template block is present, fall through to Case A / Case B below \
+using the Semantic Context.
 
 ### Case A — Top RCA scenario similarity ≥ 80%
 The system has already seen a near-identical question. Treat the matched scenario as your \

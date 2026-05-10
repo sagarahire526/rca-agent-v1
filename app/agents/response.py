@@ -1,7 +1,9 @@
 """
-Analysis Agent (formerly Response Agent) — ReAct agent that analyzes
-traversal findings, performs data-backed calculations via Python sandbox,
-and generates a PM-readable RCA report.
+Analysis Agent (formerly Response Agent) — analyzes traversal findings and
+generates a PM-readable RCA report via a single direct LLM call.
+
+No tools are bound: all numeric work must come from pre-computed traversal
+aggregates in the input data.
 
 Handles two upstream paths:
   - Direct traversal path: reads traversal_findings + traversal_tool_calls
@@ -16,19 +18,15 @@ import logging
 from typing import Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from langgraph.prebuilt import create_react_agent
 
 from models.state import RCAState
 from services.llm_provider import LLMProvider
-from tools.langchain_tools import get_analysis_tools
 from prompts.response_prompt import RESPONSE_SYSTEM
 from prompts.algorithm_prompt import ALGORITHM_SYSTEM
 from prompts.chart_prompt import CHART_SYSTEM
 
 
 logger = logging.getLogger(__name__)
-
-MAX_TOOL_CALLS = 3
 
 
 def _unwrap_string_encoded_json(value: Any) -> Any:
@@ -225,71 +223,13 @@ def _print_divider(char: str = "-", width: int = 70):
     print(f"{_DIM}{char * width}{_RESET}")
 
 
-def _print_tool_call(step_num: int, tool_name: str, tool_input: dict):
-    _print_divider()
-    print(f"{_BOLD}{_CYAN}  Analysis Step {step_num}: {tool_name}{_RESET}")
-    for key, val in tool_input.items():
-        val_str = str(val)
-        if key == "code":
-            print(f"     {_DIM}{key}:{_RESET}")
-            for line in val_str.splitlines():
-                print(f"       {_DIM}{line}{_RESET}")
-        else:
-            if len(val_str) > 200:
-                val_str = val_str[:200] + "..."
-            print(f"     {_DIM}{key}:{_RESET} {val_str}")
-
-
-def _print_tool_result(status: str, output: str):
-    if status == "error":
-        icon, color = "X", _RED
-    else:
-        icon, color = "OK", _GREEN
-
-    display = output
-    try:
-        parsed = json.loads(output)
-        if isinstance(parsed, dict):
-            if "error" in parsed:
-                display = f"Error: {parsed['error']}"
-                status = "error"
-            elif "status" in parsed and parsed["status"] == "success":
-                result_val = parsed.get("result", parsed.get("output", ""))
-                display = f"Success: {json.dumps(result_val, default=str)[:500]}"
-            else:
-                display = json.dumps(parsed, indent=2, default=str)
-                if len(display) > 1000:
-                    display = display[:1000] + "\n     ...(truncated)"
-        else:
-            display = str(parsed)
-            if len(display) > 1000:
-                display = display[:1000] + "...(truncated)"
-    except (json.JSONDecodeError, TypeError):
-        if len(display) > 1000:
-            display = display[:1000] + "...(truncated)"
-
-    color_out = _RED if status == "error" else _GREEN
-    print(f"     {color_out}{icon} Result:{_RESET} {display}")
-
-
-def _print_agent_thinking(content: str):
-    if not content.strip():
-        return
-    text = content.strip()
-    if len(text) > 500:
-        text = text[:500] + "..."
-    print(f"  {_YELLOW}Analysis:{_RESET} {text}")
-
-
 def response_node(state: RCAState) -> dict[str, Any]:
     """
-    LangGraph node: Analysis Agent (ReAct) for RCA.
+    LangGraph node: Analysis Agent for RCA.
 
-    Uses run_python tool to perform calculations on traversal data,
-    then generates a comprehensive, data-backed RCA report.
-
-    Streams agent execution so every thinking step, tool call, and tool
-    result is logged to the terminal in real-time.
+    Generates a PM-readable RCA report via a single direct LLM call.
+    No tools are bound — all numbers must come from pre-computed
+    aggregates in the traversal data.
 
     Reads: refined_query (or user_query), traversal/planner data, errors
     Writes: final_response, calculations, data_summary, current_phase, messages
@@ -365,110 +305,43 @@ def response_node(state: RCAState) -> dict[str, Any]:
 
     user_message_parts.append(
         "\n## Instructions"
-        "\nAnalyze the collected investigation data above. Most numbers you need "
-        "are already in the traversal data — use them directly. Only use the "
-        "run_python tool when you need to derive a non-obvious metric "
-        "(e.g., correlations, trend slopes, weighted averages, projected impact "
-        "of a recommendation) that isn't already present in the data. Limit "
-        "yourself to at most 2 run_python calls. "
-        "After analysis, generate a concise, PM-readable RCA report with "
-        "data-backed root causes and **quantified** recommendations. Every "
-        "recommendation in section 7 MUST include a numeric Current → Projected "
-        "delta on a named metric — never plain-English-only suggestions. If you "
-        "cannot derive a numeric projection for an action from the data, drop "
-        "that recommendation."
+        "\nAnalyze the collected investigation data above. All numbers you need "
+        "must come from the traversal data — use the pre-computed aggregates "
+        "directly. Do NOT invent numbers and do NOT attempt any computation "
+        "outside what is already present in the data. "
+        "Generate a concise, PM-readable RCA report with data-backed root "
+        "causes and **quantified** recommendations. Every recommendation row "
+        "MUST include a numeric Current → Projected delta on a named metric — "
+        "never plain-English-only suggestions. If you cannot derive a numeric "
+        "projection for an action from the data, drop that recommendation."
     )
 
     human_message = "\n".join(user_message_parts)
 
-    # Build the ReAct agent with python sandbox tool
-    tools = get_analysis_tools()
-    agent = create_react_agent(
-        model=llm,
-        tools=tools,
-        prompt=RESPONSE_SYSTEM,
-    )
-
-    # ── Live-streaming execution ──
+    # ── Direct LLM call (no tools) ──
     print(f"\n{_BOLD}{'=' * 70}")
     print(f"  ANALYSIS AGENT — Generating Data-Backed RCA Report")
     print(f"{'=' * 70}{_RESET}")
-    print(f"  {_DIM}Query: {user_query[:80]}{_RESET}")
-    print(f"  {_DIM}Max tool calls: {MAX_TOOL_CALLS}{_RESET}\n")
+    print(f"  {_DIM}Query: {user_query[:80]}{_RESET}\n")
 
     start_time = time.perf_counter()
-    step_num = 0
     final_response = ""
-    limit_hit = False
-    tool_results: list[str] = []
 
     try:
-        for chunk in agent.stream(
-            {"messages": [("human", human_message)]},
-            config={"recursion_limit": MAX_TOOL_CALLS * 3 + 10},
-            stream_mode="updates",
-        ):
-            for node_name, node_output in chunk.items():
-                messages = node_output.get("messages", [])
-
-                for msg in messages:
-                    # ── AI message: thinking or tool call ──
-                    if msg.type == "ai":
-                        text = getattr(msg, "content", "") or ""
-
-                        # Agent reasoning (no tool call attached)
-                        if text.strip() and not getattr(msg, "tool_calls", None):
-                            _print_agent_thinking(text)
-                            final_response = text
-
-                        # Tool calls the agent wants to make
-                        if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            for tc in msg.tool_calls:
-                                step_num += 1
-                                _print_tool_call(step_num, tc["name"], tc["args"])
-
-                    # ── Tool result message ──
-                    elif msg.type == "tool":
-                        output = msg.content or ""
-                        status = "error" if "error" in output.lower()[:200] else "success"
-                        _print_tool_result(status, output)
-                        tool_results.append(output)
-
-            # ── Hard stop after MAX_TOOL_CALLS ──
-            if step_num >= MAX_TOOL_CALLS:
-                print(f"\n  {_YELLOW}Tool call limit reached ({MAX_TOOL_CALLS}). "
-                      f"Finalizing report with data collected so far.{_RESET}")
-                limit_hit = True
-                break
-
-        # ── Fallback: generate report if agent didn't produce one ──
-        if not final_response.strip():
-            print(f"  {_YELLOW}No final response from agent — generating via direct LLM call.{_RESET}")
-            tool_context = ""
-            if tool_results:
-                tool_context = (
-                    "\n\n## Computation Results\n"
-                    + "\n\n".join(tool_results)
-                )
-            fallback_response = llm.invoke([
-                SystemMessage(content=RESPONSE_SYSTEM),
-                HumanMessage(content=human_message + tool_context
-                             + "\n\nGenerate the final report now. Do NOT call any tools."),
-            ])
-            final_response = fallback_response.content
+        response_msg = llm.invoke([
+            SystemMessage(content=RESPONSE_SYSTEM),
+            HumanMessage(content=human_message),
+        ])
+        final_response = response_msg.content or ""
 
         elapsed = time.perf_counter() - start_time
 
         _print_divider("=")
-        suffix = " (limit reached)" if limit_hit else ""
-        print(f"  {_BOLD}Analysis complete: {step_num} calculations performed in {elapsed:.1f}s{suffix}{_RESET}")
+        print(f"  {_BOLD}Analysis complete in {elapsed:.1f}s{_RESET}")
         _print_divider("=")
         print()
 
-        logger.info(
-            "Analysis agent completed: %d calculations in %.1fs%s",
-            step_num, elapsed, suffix,
-        )
+        logger.info("Analysis agent completed in %.1fs", elapsed)
 
         algorithm_thread.join(timeout=30)
         execution_algorithm = algorithm_result["value"]
@@ -479,15 +352,12 @@ def response_node(state: RCAState) -> dict[str, Any]:
             "final_response": final_response,
             "execution_algorithm": execution_algorithm,
             "generated_charts": generated_charts,
-            "calculations": f"{step_num} python calculations executed",
+            "calculations": "",
             "data_summary": {},
             "current_phase": "complete",
             "messages": [{
                 "agent": "analysis",
-                "content": (
-                    f"Analysis complete: {step_num} calculations, "
-                    f"{elapsed:.1f}s elapsed"
-                ),
+                "content": f"Analysis complete in {elapsed:.1f}s",
             }],
         }
 

@@ -253,3 +253,79 @@ class SandboxRequest(BaseModel):
             }
         }
     }
+
+
+# ── Internal Scenarios (curated planner step templates) ──────────────────────
+
+class InternalScenarioCreate(BaseModel):
+    tag: str
+    question: str
+    steps: list[str]
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "tag": "Cx start delay RCA",
+                "question": (
+                    "How many sites Cx start (Swap start) delayed in last 6 months. "
+                    "Provide Month wise delayed site count with RCA summary"
+                ),
+                "steps": [
+                    "For Swap completed sites - Retrieve planned vs actual Cx start dates and compute delays",
+                    "Identify delayed sites and aggregate month-wise counts",
+                    "For not completed sites, identify if any Start delay code is there",
+                    "Break delays by dependency type (material, Access, crew, etc.)",
+                    "Identify dominant delay drivers per month",
+                    "Check recurring vs one-time issues",
+                    "Map delays to vendors/GCs if needed & Provide month-wise RCA summary",
+                ],
+            }
+        }
+    }
+
+
+class InternalScenarioOut(BaseModel):
+    id: str
+    tag: str
+    question: str
+    steps: list[str]
+    embedding_model: str
+    created_at: str
+
+
+class InternalScenarioSearchRequest(BaseModel):
+    query: str
+    threshold: float = 0.90
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "query": "How many Cx swap starts were delayed in the last 6 months?",
+                "threshold": 0.90,
+            }
+        }
+    }
+
+
+class InternalScenarioMatch(BaseModel):
+    id: str
+    tag: str
+    question: str
+    steps: list[str]
+    embedding_model: str
+    created_at: str
+    similarity_score: float
+    similarity_pct: str
+
+
+class InternalScenarioSearchResponse(BaseModel):
+    query: str
+    threshold: float
+    total_indexed: int
+    matches_found: int
+    matches: list[InternalScenarioMatch]
+
+
+class InternalScenarioDeleteResponse(BaseModel):
+    deleted: bool
+    id: str

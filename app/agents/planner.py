@@ -22,7 +22,10 @@ from models.state import RCAState
 from services.llm_provider import LLMProvider
 from agents.traversal import atraversal_node
 from services.semantic_service import get_semantic_service
+from services.internal_scenarios import get_internal_scenarios_store
 from prompts.planner_prompt import PLANNER_SYSTEM
+
+_PLAN_TEMPLATE_THRESHOLD = 0.90
 
 logger = logging.getLogger(__name__)
 
@@ -131,14 +134,66 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     except Exception as e:
         logger.warning("Semantic search in planner failed (non-fatal): %s", e)
 
+    # ── Step 1b: Look up curated plan template (override path) ──
+    matched_plan_template = ""
+    matched_template_meta: dict[str, Any] = {}
+    try:
+        store = get_internal_scenarios_store()
+        template_matches = store.search(
+            refined_query, threshold=_PLAN_TEMPLATE_THRESHOLD, top_k=1
+        )
+        if template_matches:
+            m = template_matches[0]
+            steps_block = "\n".join(
+                f"  {i + 1}. {s}" for i, s in enumerate(m["steps"])
+            )
+            matched_plan_template = (
+                f"## Curated Plan Template (high-confidence match — "
+                f"similarity {m['similarity_score'] * 100:.1f}%)\n"
+                f"This is a pre-vetted plan for a near-identical question. "
+                f"Use these steps as the spine of your plan; only adapt filters "
+                f"(market, region, vendor/GC, dates, time window) to the user's "
+                f"actual ask. Do not invent new steps, drop steps, or reorder "
+                f"steps unless filter adaptation strictly requires it.\n\n"
+                f"**Matched scenario tag:** {m['tag']}\n"
+                f"**Matched question:** {m['question']}\n\n"
+                f"**Pre-vetted steps:**\n{steps_block}"
+            )
+            matched_template_meta = {
+                "id": m["id"],
+                "tag": m["tag"],
+                "similarity_score": m["similarity_score"],
+            }
+            print(
+                f"  {_GREEN}Curated plan template hit: {m['tag']} "
+                f"({m['similarity_score'] * 100:.1f}%){_RESET}"
+            )
+            logger.info(
+                "Internal scenario fetched: tag='%s' id=%s similarity=%.3f",
+                m["tag"], m["id"], m["similarity_score"],
+            )
+        else:
+            print(
+                f"  {_DIM}No curated plan template match (threshold "
+                f"{_PLAN_TEMPLATE_THRESHOLD * 100:.0f}%).{_RESET}"
+            )
+            logger.info(
+                "No internal scenario match (threshold=%.2f) for query: %.80s",
+                _PLAN_TEMPLATE_THRESHOLD, refined_query,
+            )
+    except Exception as e:
+        logger.warning("Internal scenario lookup failed (non-fatal): %s", e)
+
     # ── Step 2: LLM creates the investigation plan ──
     provider = LLMProvider(model="gpt-5", reasoning_effort="medium")
     llm = provider.get_llm()
 
     safe_semantic = semantic_context.replace("{", "{{").replace("}", "}}")
+    safe_template = matched_plan_template.replace("{", "{{").replace("}", "}}")
 
     planning_prompt = PLANNER_SYSTEM.format(
         semantic_context=safe_semantic,
+        matched_plan_template=safe_template,
         today_date=_date.today().isoformat(),
     )
 
@@ -206,6 +261,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         "rca_scenario_guidance": rca_guidance,
         "planner_semantic_context": semantic_context,
         "semantic_context_data": context_data,
+        "matched_plan_template": matched_template_meta,
         "current_phase": "response",
         "messages": [{
             "agent": "planner",

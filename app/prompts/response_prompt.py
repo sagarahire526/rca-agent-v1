@@ -1,7 +1,7 @@
 """
 Response Agent system prompt — RCA Agent.
 
-The analysis agent is a ReAct agent with access to the python_sandbox tool.
+The analysis agent is a single-shot LLM call (no tools).
 It receives traversal data and user query as the human message from agents/response.py.
 """
 
@@ -177,8 +177,9 @@ it out.
 - Bold key numbers inline.
 - Use markdown tables and bullets wherever possible.
 - No technical node IDs or KPI IDs — human-readable text only.
-- Use pre-computed aggregates from traversal data directly. Only use run_python \
-for derived metrics not already in the data (max 2 calls).
+- Use pre-computed aggregates from traversal data directly. NO tools are \
+available — never reference computation, code execution, or "let me calculate". \
+If a number isn't in the traversal data, omit the finding.
 - **No follow-up suggestions or termination markers** — Do NOT end with \
 "if you want…", "let me know if…", "would you like…", "---END---", or any \
 similar phrases. End the response after the last substantive section. No sign-offs.

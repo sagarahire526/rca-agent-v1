@@ -463,13 +463,14 @@ def _check_macro_combined_filter(code: str, project_type: str) -> str | None:
     if _MACRO_TABLE not in code:
         return None
 
-    ntm_eq = re.compile(r"smp_name\s*=\s*'NTM'", re.IGNORECASE)
+    # Updated patterns to handle quoted column names
+    ntm_eq = re.compile(r'(?:"|\\")?\s*smp_name\s*(?:"|\\")?\s*=\s*\'NTM\'', re.IGNORECASE)
     ahlob_eq = re.compile(
-        r"smp_name\s*=\s*'AHLOB Modernization'", re.IGNORECASE
+        r'(?:"|\\")?\s*smp_name\s*(?:"|\\")?\s*=\s*\'AHLOB Modernization\'', re.IGNORECASE
     )
 
     if project_type == "Both":
-        has_in = re.search(r"smp_name\s+IN\s*\(", code, re.IGNORECASE)
+        has_in = re.search(r'(?:"|\\")?\s*smp_name\s*(?:"|\\")?\s+IN\s*\(', code, re.IGNORECASE)
         has_both = (
             _BOTH_SMP_VALUES[0] in code and _BOTH_SMP_VALUES[1] in code
         )
@@ -491,7 +492,7 @@ def _check_macro_combined_filter(code: str, project_type: str) -> str | None:
 
     # Single project type — must contain the selected one and not the other
     expected = re.compile(
-        rf"smp_name\s*=\s*'{re.escape(project_type)}'", re.IGNORECASE
+        rf'(?:"|\\")?\s*smp_name\s*(?:"|\\")?\s*=\s*\'{re.escape(project_type)}\'', re.IGNORECASE
     )
     if not expected.search(code):
         return (
@@ -505,7 +506,7 @@ def _check_macro_combined_filter(code: str, project_type: str) -> str | None:
     )
     if wrong_value:
         wrong_pattern = re.compile(
-            rf"smp_name\s*=\s*'{re.escape(wrong_value)}'", re.IGNORECASE
+            rf'(?:"|\\")?\s*smp_name\s*(?:"|\\")?\s*=\s*\'{re.escape(wrong_value)}\'', re.IGNORECASE
         )
         if wrong_pattern.search(code):
             return (
