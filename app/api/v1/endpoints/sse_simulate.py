@@ -93,16 +93,26 @@ def _run_stream_thread(
             algorithm=final_state.get("execution_algorithm", ""),
             charts=final_state.get("generated_charts", []),
         )
+        # Emit heavy payloads as discrete events so the client can render
+        # them independently as they arrive.
+        sse_manager.put_sync(query_id, "algorithm", {
+            "algorithm": final_state.get("execution_algorithm", ""),
+        })
+        sse_manager.put_sync(query_id, "traces", {
+            "traces": traces,
+        })
+        sse_manager.put_sync(query_id, "charts", {
+            "charts": final_state.get("generated_charts", []),
+        })
+
+        # `complete` carries only lightweight metadata — the request is done.
         sse_manager.put_sync(query_id, "complete", {
-            "final_response":      final_state.get("final_response", ""),
-            "routing_decision":    final_state.get("routing_decision", ""),
-            "planner_steps":       final_state.get("planner_steps", []),
-            "planning_rationale":  final_state.get("planning_rationale", ""),
-            "traversal_steps":     final_state.get("traversal_steps_taken", 0),
-            "errors":              final_state.get("errors", []),
-            "traces":              traces,
-            "execution_algorithm": final_state.get("execution_algorithm", ""),
-            "generated_charts":    final_state.get("generated_charts", []),
+            "final_response":     final_state.get("final_response", ""),
+            "routing_decision":   final_state.get("routing_decision", ""),
+            "planner_steps":      final_state.get("planner_steps", []),
+            "planning_rationale": final_state.get("planning_rationale", ""),
+            "traversal_steps":    final_state.get("traversal_steps_taken", 0),
+            "errors":             final_state.get("errors", []),
         })
 
     except Exception as exc:
