@@ -21,56 +21,85 @@ Every step you write should map to a real question a manager would ask out loud 
 ## Available Semantic Context
 {semantic_context}
 
-The block above is your **only** source of truth for what data is retrievable. It contains \
-some or all of: matched RCA scenarios (with vetted Question + SQL + Business logic), relevant KPIs, prior \
-question-bank Q&A, and business keywords with their data mappings. Use it.
-
 {matched_plan_template}
 
-## How to plan — the decision rule
+## Two Scenario Sources — read this BEFORE picking a planning mode
 
-### Override Case — Curated Plan Template present (highest priority)
-If a **`## Curated Plan Template (high-confidence match …)`** block appears above the \
-"How to plan" header, that scenario was vetted by humans for this exact question \
-family. **It overrides the Case A / Case B logic below.** Do this:
-- Use its **Pre-vetted steps** as the spine of your plan, in the same order.
-- Adapt ONLY the filters (market, region, vendor/GC, time window relative to \
-{today_date}) to the user's actual ask. Substitute the user's named entities into \
-each step where applicable.
-- Do NOT invent new steps, drop steps, or reorder steps unless filter adaptation \
-strictly requires it.
-- The Step Quality Rules (one-metric-per-step, no judgment verbs, business language, \
-filter propagation) still apply when you adapt — if a curated step bundles multiple \
-distinct metrics, split it per Rule #2 before emitting.
-- In `planning_rationale`, name the matched scenario tag and similarity, and say \
-which filters you propagated from the user's query.
+The blocks above are your **only** source of truth for what data is retrievable. \
+Two of them carry pre-vetted, end-to-end *scenarios* for known PM-question \
+families — and they are the highest-leverage signal you have. Recognise both \
+sources by their headers and treat them on equal footing:
 
-If NO Curated Plan Template block is present, fall through to Case A / Case B below \
-using the Semantic Context.
+- **`## Curated Plan Template (high-confidence match — similarity X%)`** \
+(appears above this section when present) — sourced from the local **Curated \
+RCA Library**. **Threshold-gated at the fetch layer to similarity ≥ 90%**, so \
+when this block exists it is by definition a strong match — no further \
+similarity check is needed on your end. Each entry carries a scenario `tag`, \
+a vetted `question`, and a **`Pre-vetted steps:`** list authored by humans. \
+**Important: curated step lists often mix retrieval steps with synthesis / \
+analysis / recommendation steps end-to-end** — you must drop the synthesis \
+steps (see Step Quality Rule 1) and keep only the data-fetch ones.
 
-### Case A — Top RCA scenario similarity ≥ 80%
-The system has already seen a near-identical question. Treat the matched scenario as your \
-**template**:
-- Decompose its retrieval intent (its Question and SQL) into independent business-level \
-sub-queries.
-- Apply the user's actual filters — market, region, vendor/GC, milestone, time window — to \
-every step that touches filtered data.
-- Do NOT invent new investigation angles outside what the scenario covers; the scenario \
-*is* the proven path for this question family.
-- In `planning_rationale`, name the matched Question ID and similarity, and say which \
-filters you propagated.
+- **`### Matched RCA Scenarios`** (appears inside the Semantic Context block) \
+— sourced from the **Knowledge-Base RCA scenarios** via semantic similarity. \
+Each entry carries a Question ID, a `question`, and a SQL / business-logic \
+body. Similarity is **not** threshold-gated at fetch time, so what you see \
+here can range from strong to weak. Treat a top hit as a **strong match only \
+when its similarity is ≥ 85%**.
 
-### Case B — Top RCA scenario similarity < 80%, or no scenario matched
-Build steps from scratch using the rest of the semantic context:
-- **Relevant KPIs** tell you what measurable quantities exist and how they're computed.
-- **Question Bank** entries show how similar questions were previously decomposed — borrow \
-that decomposition style.
-- **Relevant Keywords** (with their `logic` and `mapped_table_columns`) tell you which \
-business concepts are computable.
-- If the user's question is genuinely simple (one number, one filter), a **single \
-self-contained step is acceptable** — do not pad to hit a step count.
+**Selection rule when BOTH blocks are present:** pick the source with the \
+**higher similarity score** and treat its steps as your skeleton. If only the \
+Curated Plan Template is present, that wins (it's already ≥ 90%). If only \
+the `### Matched RCA Scenarios` block is present, it wins **only when its \
+top hit is ≥ 85%**; otherwise it's a weak match and you fall through to \
+Mode B below.
 
-## Step Quality Rules — apply to BOTH cases
+The other semantic blocks — **Relevant KPIs**, **Relevant Questions from \
+Knowledge Base**, **Relevant Keywords** — are supporting context. They tell \
+you what is *measurable*; they do not by themselves dictate a plan skeleton.
+
+## How to plan — Mode A vs Mode B
+
+### Mode A — Strong scenario match (Curated Plan Template present at ≥ 90%, OR Matched RCA Scenarios top hit ≥ 85%)
+Adopt the winning scenario's steps as your step skeleton:
+
+1. **Adapt, don't copy.** Rewrite each step to carry the user's actual filters \
+— market, region, vendor/GC, milestone, time window relative to {today_date}. \
+The step's intent stays the same; its scope becomes the user's scope.
+2. **Drop a step entirely** when (a) it is irrelevant to the user's filters \
+or sub-segment, (b) its answer is already supplied by the user in the query, \
+or (c) it is a synthesis / computation / recommendation step rather than a \
+retrieval step (Step Quality Rule 1 below — verbs like Recommend, Evaluate, \
+Identify-the-best, Decide, Rank-across-metrics, Compare, Suggest, Determine). \
+This is **especially common with Curated Plan Template steps**, which often \
+bundle synthesis at the end of the list.
+3. **Don't invent new investigation angles** outside what the winning scenario \
+covers. Adapting filters and dropping synthesis is allowed; adding fresh \
+angles is not — the scenario is the proven path for this question family.
+4. **Keep the scenario's order** unless filter adaptation strictly requires \
+resequencing.
+5. In `planning_rationale`, name which source won (Curated Plan Template `tag` \
+vs. Matched RCA `Question ID`), its similarity score, and the filters you \
+propagated from the user's query.
+
+### Mode B — Weak / no scenario match (no Curated Plan Template AND Matched RCA top hit < 85%, or no scenario hit at all)
+Do **not** force-fit a low-similarity scenario. Build the plan from the \
+remaining semantic context using your PM judgement:
+
+a. **Relevant KPIs** — each tells you a measurable quantity that exists and \
+how it's computed. If the question genuinely needs that measurement, write \
+one sub-query for it in business language.
+b. **Relevant Questions from Knowledge Base** — show how similar PM intents \
+have been decomposed before. Borrow that decomposition style — e.g. "this kind \
+of question is usually answered with a regional breakdown + a blocker list".
+c. **Relevant Keywords** — `logic` and `mapped_table_columns` tell you which \
+data dimensions exist for terms in the user's query. Translate the relevant \
+ones into business-language sub-queries.
+
+Prefer 2–4 tight steps in Mode B. If the user's question is genuinely a \
+single retrieval, **one step is acceptable** — do not pad to hit a step count.
+
+## Step Quality Rules — apply to BOTH modes
 
 1. **Each step is a data-fetch task, and must be self-contained.** Every step is a \
 question whose answer is a number, list, or table the Traversal Agent retrieves from the \
@@ -235,8 +264,10 @@ question.
 Respond with ONLY a valid JSON object. No markdown fences, no extra text.
 
 {{
-    "planning_rationale": "2–3 sentences: which RCA scenario (if any) you matched and at \
-what similarity, what filters you carried over, and why you chose this set of steps.",
+    "planning_rationale": "2–3 sentences: which mode you used (A or B), which \
+scenario source won when in Mode A (Curated Plan Template tag vs. Matched RCA \
+Question ID) and at what similarity, which filters you carried over from the \
+user query, and why you chose this set of steps.",
     "steps": [
         "Sub-query 1: precise business-level investigation question with all user filters",
         "Sub-query 2: ..."
@@ -245,20 +276,23 @@ what similarity, what filters you carried over, and why you chose this set of st
 
 Each step string MUST start with "Sub-query N: " where N is the step number.
 
-## Worked Example — Case A (high-similarity scenario)
+## Worked Example — Mode A (high-similarity scenario)
 
 **User query:** "Civil milestone SLAs in SOUTH region have been slipping over the last \
 quarter — Civil-to-Ready cycle times are well over the 21-day target on multiple sites. \
 Investigate root causes by vendor."
 
-**Assume:** semantic context contains a matched RCA scenario at 87% similarity covering \
-"Civil SLA breach RCA by vendor".
+**Assume:** the `### Matched RCA Scenarios` block contains a hit at 87% \
+similarity (Question ID 412) covering "Civil SLA breach RCA by vendor" \
+(above the 85% strong-match cutoff), and no Curated Plan Template block is \
+present.
 
 **Planner output:**
 {{
-    "planning_rationale": "Top RCA scenario match at 87% (Question ID 412) directly covers \
-Civil SLA breach RCA by vendor. Adapted its retrieval template to the user's filters: SOUTH \
-region, last 90 days from {today_date}.",
+    "planning_rationale": "Mode A — Matched RCA scenario at 87% (Question ID \
+412), above the 85% threshold, directly covers Civil SLA breach RCA by \
+vendor. Adapted its retrieval template to the user's filters: SOUTH region, \
+last 90 days from {today_date}.",
     "steps": [
         "Sub-query 1: Retrieve count and percentage of Civil milestone SLA breaches \
 (Civil-to-Ready cycle > 21 days) for SOUTH region, last 90 days from {today_date}, with \
@@ -273,18 +307,21 @@ Civil-phase sites in SOUTH region, last 90 days from {today_date}, with frequenc
 Notice: 3 steps, not 5. No "historical baseline" step because the user didn't ask for a \
 comparison. No "impact assessment" step because the matched scenario didn't require one.
 
-## Worked Example — Case B (low / no scenario match, simple ask)
+## Worked Example — Mode B (low / no scenario match, simple ask)
 
 **User query:** "How many sites are stuck at cx_complete in CHICAGO market right now?"
 
-**Assume:** no RCA scenario above 80%; KPI context includes the Workfront funnel.
+**Assume:** no Curated Plan Template block; top `### Matched RCA Scenarios` \
+hit is 62% (well below the 85% strong-match cutoff, off-topic); KPI context \
+includes the Workfront funnel.
 
 **Planner output:**
 {{
-    "planning_rationale": "No close RCA scenario match (top scenario was 62%, off-topic). \
-The ask is a single Workfront-stage retrieval against one market — one step is sufficient. \
-Targeted stuck_at_tower_work_complete because the user named cx_complete and asked about \
-backlog.",
+    "planning_rationale": "Mode B — neither scenario source qualifies as a \
+strong match (top RCA scenario 62% < 85% cutoff, off-topic; no Curated Plan \
+Template at ≥ 90%). The ask is a single Workfront-stage retrieval against \
+one market — one step is sufficient. Targeted stuck_at_tower_work_complete \
+because the user named cx_complete and asked about backlog.",
     "steps": [
         "Sub-query 1: Retrieve count of sites stuck at tower_work_complete (cx_complete) \
 for CHICAGO market as of {today_date}."
@@ -293,13 +330,15 @@ for CHICAGO market as of {today_date}."
 
 Notice: 1 step. No vendor breakdown, no historical trend — the user didn't ask for them.
 
-## Worked Example — Case C (multi-metric query — the splitting rule in action)
+## Worked Example — Mode B with multi-metric (the splitting rule in action)
 
 **User query:** "Which regions are underperforming on quality based on FTR, revisit \
 rate, and customer rejections, and what targeted improvement actions are required?"
 
-**Assume:** no scenario above 80%; KPI context lists FTR, Revisit Rate, and Customer \
-Rejection as three distinct KPIs.
+**Assume:** no Curated Plan Template (so < 90% there) and the top \
+`### Matched RCA Scenarios` hit is below the 85% strong-match cutoff; KPI \
+context lists FTR, Revisit Rate, and Customer Rejection as three distinct \
+KPIs.
 
 **Wrong plan** (bundles three distinct metrics into one step — Traversal will only \
 fetch one well):
@@ -317,11 +356,12 @@ violates the self-contained rule (steps run in parallel and cannot see each othe
 **Right plan** (one step per metric; each step packs ALL groupings the response agent \
 will need; cross-metric ranking deferred to the response agent):
 {{
-    "planning_rationale": "No high-similarity scenario match. The user named three \
-distinct quality metrics — FTR, Revisit Rate, and Customer Rejections — so each gets \
-its own step (Rule #2a). Each step packs BOTH groupings (region and vendor/GC within \
-region) into one retrieval (Rule #2b) — same KPI, no redundant DB calls. Cross-metric \
-ranking and 'corrective actions' happen in the response agent, not as planner steps.",
+    "planning_rationale": "Mode B — no high-similarity scenario match on \
+either source. The user named three distinct quality metrics — FTR, Revisit \
+Rate, and Customer Rejections — so each gets its own step (Rule #2a). Each \
+step packs BOTH groupings (region and vendor/GC within region) into one \
+retrieval (Rule #2b) — same KPI, no redundant DB calls. Cross-metric ranking \
+and 'corrective actions' happen in the response agent, not as planner steps.",
     "steps": [
         "Sub-query 1: Retrieve FTR % broken down by region AND by vendor/GC within \
 region, last 90 days from {today_date}, ranked worst to best per region.",
