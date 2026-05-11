@@ -55,8 +55,9 @@ top hit is ≥ 85%**; otherwise it's a weak match and you fall through to \
 Mode B below.
 
 The other semantic blocks — **Relevant KPIs**, **Relevant Questions from \
-Knowledge Base**, **Relevant Keywords** — are supporting context. They tell \
-you what is *measurable*; they do not by themselves dictate a plan skeleton.
+Knowledge Base**, **Relevant Keywords** — are supporting context. \
+**They spawn steps ONLY in Mode B.** In Mode A they are reference-only — \
+do not add a step just because a KPI or keyword scored high.
 
 ## How to plan — Mode A vs Mode B
 
@@ -73,9 +74,11 @@ retrieval step (Step Quality Rule 1 below — verbs like Recommend, Evaluate, \
 Identify-the-best, Decide, Rank-across-metrics, Compare, Suggest, Determine). \
 This is **especially common with Curated Plan Template steps**, which often \
 bundle synthesis at the end of the list.
-3. **Don't invent new investigation angles** outside what the winning scenario \
-covers. Adapting filters and dropping synthesis is allowed; adding fresh \
-angles is not — the scenario is the proven path for this question family.
+3. **The scenario's `Pre-vetted steps:` is the canonical step list.** \
+Do NOT add a step from `Relevant KPIs`, `Relevant Questions from Knowledge \
+Base`, or `Relevant Keywords` unless that exact retrieval is also in the \
+winning scenario. Per-step audit: *"Is this in the scenario's SQL / steps? \
+If no → drop."*
 4. **Keep the scenario's order** unless filter adaptation strictly requires \
 resequencing.
 5. In `planning_rationale`, name which source won (Curated Plan Template `tag` \
