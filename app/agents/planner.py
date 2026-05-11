@@ -135,15 +135,33 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         logger.warning("Semantic search in planner failed (non-fatal): %s", e)
 
     # ── Step 1b: Look up curated plan template (override path) ──
+    # Search with BOTH raw user_query and refined_query, keep the best match.
+    # The refiner paraphrases (expanding abbreviations, swapping verbs, appending
+    # skip-default scope) which can shift the embedding off a stored scenario
+    # that was authored to mirror raw user phrasing.
     matched_plan_template = ""
     matched_template_meta: dict[str, Any] = {}
     try:
         store = get_internal_scenarios_store()
-        template_matches = store.search(
-            refined_query, threshold=_PLAN_TEMPLATE_THRESHOLD, top_k=1
-        )
-        if template_matches:
-            m = template_matches[0]
+        raw_query = state["user_query"]
+
+        query_forms: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for label, q in (("raw", raw_query), ("refined", refined_query)):
+            if q and q not in seen:
+                query_forms.append((label, q))
+                seen.add(q)
+
+        best: dict[str, Any] | None = None
+        best_form: str = ""
+        for label, q in query_forms:
+            hits = store.search(q, threshold=_PLAN_TEMPLATE_THRESHOLD, top_k=1)
+            if hits and (best is None or hits[0]["similarity_score"] > best["similarity_score"]):
+                best = hits[0]
+                best_form = label
+
+        if best is not None:
+            m = best
             steps_block = "\n".join(
                 f"  {i + 1}. {s}" for i, s in enumerate(m["steps"])
             )
@@ -166,20 +184,21 @@ def planner_node(state: RCAState) -> dict[str, Any]:
             }
             print(
                 f"  {_GREEN}Curated plan template hit: {m['tag']} "
-                f"({m['similarity_score'] * 100:.1f}%){_RESET}"
+                f"({m['similarity_score'] * 100:.1f}%, matched on {best_form} query){_RESET}"
             )
             logger.info(
-                "Internal scenario fetched: tag='%s' id=%s similarity=%.3f",
-                m["tag"], m["id"], m["similarity_score"],
+                "Internal scenario fetched: tag='%s' id=%s similarity=%.3f form=%s",
+                m["tag"], m["id"], m["similarity_score"], best_form,
             )
         else:
             print(
                 f"  {_DIM}No curated plan template match (threshold "
-                f"{_PLAN_TEMPLATE_THRESHOLD * 100:.0f}%).{_RESET}"
+                f"{_PLAN_TEMPLATE_THRESHOLD * 100:.0f}%, tried "
+                f"{len(query_forms)} query form(s)).{_RESET}"
             )
             logger.info(
-                "No internal scenario match (threshold=%.2f) for query: %.80s",
-                _PLAN_TEMPLATE_THRESHOLD, refined_query,
+                "No internal scenario match (threshold=%.2f) for raw=%.80s | refined=%.80s",
+                _PLAN_TEMPLATE_THRESHOLD, raw_query, refined_query,
             )
     except Exception as e:
         logger.warning("Internal scenario lookup failed (non-fatal): %s", e)
