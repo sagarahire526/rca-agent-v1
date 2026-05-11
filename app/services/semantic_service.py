@@ -283,6 +283,22 @@ class SemanticService:
         score   = f"{best.get('similarity_score', 0) * 100:.1f}%"
         q_id    = content.get("question_id", best.get("id", "?"))
 
+        # ── TEMP DEBUG: dump raw RCA hit so we can see the API's actual schema.
+        # Remove once the missing-question/missing-sql issue is diagnosed.
+        try:
+            import json as _json
+            logger.warning(
+                "[DEBUG rca-guidance] top-level keys=%s | content keys=%s | "
+                "question_present=%s sql_present=%s | full=%s",
+                list(best.keys()),
+                list(content.keys()) if isinstance(content, dict) else type(content).__name__,
+                bool(content.get("question")) if isinstance(content, dict) else False,
+                bool(content.get("sql")) if isinstance(content, dict) else False,
+                _json.dumps(best, default=str)[:2000],
+            )
+        except Exception as _dbg_exc:  # never let debug logging break the flow
+            logger.warning("[DEBUG rca-guidance] dump failed: %s", _dbg_exc)
+
         lines: list[str] = [
             "## Matched RCA — Guidance (Reference Only)",
             f"*Question ID {q_id} · Similarity {score}*",
