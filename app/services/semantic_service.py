@@ -42,11 +42,18 @@ _TABLE_TOP_K: dict[str, int] = {
 }
 _REQUEST_TIMEOUT = 15  # seconds
 
-# Known structured keys inside the rca table's content dict
+# Structured keys inside the rca table's content dict.
+# steps_to_get_data_sql is human-readable STEPS for building a SQL (not SQL itself),
+# so it must NOT be rendered as a ```sql fenced block.
 _RCA_CONTENT_KEYS: dict[str, str] = {
-    "question_id": "Question ID",
-    "question":    "Question",
-    "sql":         "SQL",
+    "problem_id":                "Problem ID",
+    "rca_question":              "Question",
+    "type_of_rca_question":      "Question Type",
+    "relevant_kpis":             "Relevant KPIs",
+    "root_causes":               "Root Causes",
+    "recommendation_area":       "Recommendation Area",
+    "steps_to_get_data_sql":     "Data-Retrieval Steps",
+    "root_cause_sudo_sql_schema": "Pseudo-SQL Schema",
 }
 
 
@@ -281,41 +288,73 @@ class SemanticService:
         best    = rca_results[0]  # highest similarity
         content = best.get("content") or {}
         score   = f"{best.get('similarity_score', 0) * 100:.1f}%"
-        q_id    = content.get("question_id", best.get("id", "?"))
-
-        # ── TEMP DEBUG: dump raw RCA hit so we can see the API's actual schema.
-        # Remove once the missing-question/missing-sql issue is diagnosed.
-        try:
-            import json as _json
-            logger.warning(
-                "[DEBUG rca-guidance] top-level keys=%s | content keys=%s | "
-                "question_present=%s sql_present=%s | full=%s",
-                list(best.keys()),
-                list(content.keys()) if isinstance(content, dict) else type(content).__name__,
-                bool(content.get("question")) if isinstance(content, dict) else False,
-                bool(content.get("sql")) if isinstance(content, dict) else False,
-                _json.dumps(best, default=str)[:2000],
-            )
-        except Exception as _dbg_exc:  # never let debug logging break the flow
-            logger.warning("[DEBUG rca-guidance] dump failed: %s", _dbg_exc)
+        q_id    = (
+            content.get("problem_id")
+            or content.get("question_id")
+            or best.get("id", "?")
+        )
 
         lines: list[str] = [
             "## Matched RCA — Guidance (Reference Only)",
-            f"*Question ID {q_id} · Similarity {score}*",
+            f"*Problem ID {q_id} · Similarity {score}*",
             "",
         ]
 
-        question: str = content.get("question", "")
-        if question:
-            lines.append(f"### Question")
-            lines.append(question)
+        def _render(key: str, label: str, *, as_block: bool = False) -> None:
+            val = content.get(key)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                return
+            lines.append(f"### {label}")
+            if isinstance(val, list):
+                for item in val:
+                    if str(item).strip():
+                        lines.append(f"- {item}")
+            elif as_block:
+                lines.append(str(val))
+            else:
+                lines.append(str(val))
             lines.append("")
 
-        sql: str = content.get("sql", "")
-        if sql:
+        # Question — prefer new schema, fall back to legacy "question"
+        if content.get("rca_question") or content.get("question"):
+            lines.append("### Question")
+            lines.append(content.get("rca_question") or content.get("question"))
+            lines.append("")
+
+        _render("type_of_rca_question", "Question Type")
+        _render("relevant_kpis",        "Relevant KPIs")
+        _render("root_causes",          "Root Causes")
+        _render("recommendation_area",  "Recommendation Area")
+
+        # Data-retrieval steps — procedural text, NOT executable SQL.
+        # Do not wrap in a ```sql fence.
+        steps_val = content.get("steps_to_get_data_sql")
+        if steps_val:
+            lines.append("### Data-Retrieval Steps")
+            lines.append("*(Follow these steps to derive the right SQL — adapt to what was actually retrieved.)*")
+            if isinstance(steps_val, list):
+                for item in steps_val:
+                    if str(item).strip():
+                        lines.append(f"- {item}")
+            else:
+                lines.append(str(steps_val))
+            lines.append("")
+
+        # Pseudo-SQL schema sketch — render in a generic code fence since it's
+        # schema-ish text rather than valid SQL.
+        pseudo_sql = content.get("root_cause_sudo_sql_schema")
+        if pseudo_sql:
+            lines.append("### Pseudo-SQL Schema")
+            lines.append(f"```\n{pseudo_sql}\n```")
+            lines.append("")
+
+        # Legacy "sql" key — kept for backward compatibility if the API ever
+        # returns real executable SQL under this name.
+        legacy_sql = content.get("sql")
+        if legacy_sql:
             lines.append("### SQL")
             lines.append("*(Adapt to what was actually retrieved)*")
-            lines.append(f"```sql\n{sql}\n```")
+            lines.append(f"```sql\n{legacy_sql}\n```")
             lines.append("")
 
         return "\n".join(lines)
