@@ -33,8 +33,12 @@ _BOTH_SMP_VALUES = ("NTM", "AHLOB Modernization")
 
 
 def _build_project_type_filter(project_type: str) -> str:
-    """Build the prompt instruction for smp_name filtering on macro_combined."""
-    if not project_type:
+    """Build the prompt instruction for smp_name filtering on macro_combined.
+
+    NAS reads from an isolated graph that does not use the macro_combined
+    `smp_name` column, so no SQL filter is injected for it.
+    """
+    if not project_type or project_type == "NAS":
         return ""
 
     if project_type == "Both":
@@ -235,8 +239,9 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
 
     # ── KG schema: per-query embedding search + static table list ─────────
     table_list = state.get("kg_schema", "")  # discover_schema now stores table list only
+    project_type = state.get("project_type", "")
     try:
-        kg_schema = search_schema(traversal_query) + table_list
+        kg_schema = search_schema(traversal_query, project_type=project_type) + table_list
     except Exception as e:
         logger.warning("Embedding schema search failed (non-fatal): %s", e)
         kg_schema = table_list or "Schema not available"
@@ -275,13 +280,12 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
     safe_semantic  = semantic_context.replace("{", "{{").replace("}", "}}")
 
     # ── Build project-type filter instruction for the prompt ──
-    project_type = state.get("project_type", "")
     print(f"  {_DIM}Project type in state: '{project_type}'{_RESET}", flush=True)
     project_type_filter = _build_project_type_filter(project_type)
     if project_type_filter:
         print(f"  {_GREEN}Project type filter injected for: {project_type}{_RESET}", flush=True)
     else:
-        print(f"  {_YELLOW}No project type in state — smp_name filter NOT applied{_RESET}", flush=True)
+        print(f"  {_YELLOW}No smp_name filter applied (project_type='{project_type}'){_RESET}", flush=True)
 
     from datetime import date as _date
     system_prompt = TRAVERSAL_SYSTEM.format(
@@ -368,8 +372,9 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     # ── KG schema: per-sub-query embedding search + static table list ─────
     sub_query = state["user_query"]
     table_list = state.get("kg_schema", "")  # discover_schema now stores table list only
+    project_type = state.get("project_type", "")
     try:
-        kg_schema = search_schema(sub_query) + table_list
+        kg_schema = search_schema(sub_query, project_type=project_type) + table_list
     except Exception as e:
         logger.warning("[async] Embedding schema search failed (non-fatal): %s", e)
         kg_schema = table_list or "Schema not available"
@@ -381,7 +386,6 @@ async def atraversal_node(state: RCAState) -> dict[str, Any]:
     safe_semantic  = semantic_context.replace("{", "{{").replace("}", "}}")
 
     # ── Build project-type filter instruction for the prompt ──
-    project_type = state.get("project_type", "")
     project_type_filter = _build_project_type_filter(project_type)
     if project_type_filter:
         print(f"  {_GREEN}[async] Project type filter injected for: {project_type}{_RESET}", flush=True)

@@ -15,6 +15,7 @@ class ProjectType(str, Enum):
     NTM = "NTM"
     AHLOB_MODERNIZATION = "AHLOB Modernization"
     BOTH = "Both"
+    NAS = "NAS"
 
 
 # ── Analyze (RCA) ────────────────────────────────────────────────────────────

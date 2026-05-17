@@ -42,7 +42,7 @@ class RCAState(TypedDict):
     ]
 
     # ── Project type filter ──
-    project_type: str            # "NTM" | "AHLOB Modernization" | ""
+    project_type: str            # "NTM" | "AHLOB Modernization" | "Both" | "NAS" | ""
 
     # ── Orchestrator routing ──
     routing_decision: str        # "greeting" | "rca" | "traversal"

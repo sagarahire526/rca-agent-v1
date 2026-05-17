@@ -572,12 +572,18 @@ def _make_filtered_run_sql_python(project_type: str) -> StructuredTool:
 # Tool registry
 # ─────────────────────────────────────────────
 
+def _needs_smp_filter(project_type: str) -> bool:
+    """smp_name validation applies to NTM / AHLOB / Both. NAS uses an
+    isolated graph that does not use the macro_combined `smp_name` column."""
+    return bool(project_type) and project_type != "NAS"
+
+
 def get_all_tools(project_type: str = "") -> list:
     """Return all tools for the traversal agent, ordered by KPI-first priority.
-    When project_type is set, run_sql_python gets filter validation."""
+    When project_type is NTM / AHLOB / Both, run_sql_python gets smp_name filter validation."""
     sql_tool = (
         _make_filtered_run_sql_python(project_type)
-        if project_type
+        if _needs_smp_filter(project_type)
         else run_sql_python
     )
     return [
@@ -600,7 +606,7 @@ def get_fast_tools(project_type: str = "") -> list:
     """
     sql_tool = (
         _make_filtered_run_sql_python(project_type)
-        if project_type
+        if _needs_smp_filter(project_type)
         else run_sql_python
     )
     return [
