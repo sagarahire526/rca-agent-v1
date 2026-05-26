@@ -104,6 +104,9 @@ def _run_stream_thread(
         sse_manager.put_sync(query_id, "charts", {
             "charts": final_state.get("generated_charts", []),
         })
+        sse_manager.put_sync(query_id, "analysis", {
+            "analysis": final_state.get("semantic_context_data", {}),
+        })
 
         # `complete` carries only lightweight metadata — the request is done.
         sse_manager.put_sync(query_id, "complete", {
