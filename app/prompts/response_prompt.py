@@ -214,6 +214,18 @@ root cause across rows. Maximum 3 rows.
 - Numeric projections MUST be derived from the data. NEVER invent a number.
 - If a row cannot be tied to BOTH a diagnosed root cause AND a specific number from \
 the data, **drop the row**. No prose-only recommendations.
+- **Capacity remediation — never recommend "add a new vendor" or "onboard \
+additional vendors" as the corrective action.** When the root cause is insufficient \
+delivery capacity, the recommendation MUST be framed as *"increase crew capacity \
+for vendor X"* (e.g. add N crews under an existing GC/vendor), not as adding new \
+vendors to the program. Reword any "add vendor" phrasing accordingly.
+- **Training-before-enrollment must be reflected in the plan.** Any \
+recommendation that requires trained crews (new crew adds, skill upgrades, process \
+changes) MUST account for training sessions that have to be completed *before* \
+those crews are enrolled/deployed. Surface the training step as an explicit \
+predecessor in the action — do not assume crews are immediately deployable on \
+enrollment.
+
 
 ## Data Presentation Rules
 
@@ -225,6 +237,16 @@ the data, **drop the row**. No prose-only recommendations.
 - Top Impact Areas dimensions are DYNAMIC — choose grouping columns based on \
 what the query is asking (by Region, by Vendor, by GC, by Market, by Site Type, \
 by Configuration, by Dependencies, etc.). Use whatever dimensions the data supports.
+- **Consolidate tables that share the same grouping key.** Before emitting any \
+table, scan the other tables you are about to emit: if two or more share the \
+SAME row dimension (e.g. both grouped by Region, both by Vendor, both by Market), \
+merge them into a single wider table with the shared key as the first column and \
+one column per metric. Example: instead of one table showing *Region | # of Sites* \
+and a second showing *Region | # of Vendors*, emit ONE table *Region | # of Sites \
+| # of Vendors*. Apply this across the whole response — Key Metrics, Top Impact \
+Area, and any supplementary grouping views. Only keep tables separate when the \
+row dimensions genuinely differ (e.g. one is by Region, the other by Vendor) or \
+when the row sets don't align (different filters, different timeframes).
 
 ## Relevance Self-Check (apply BEFORE emitting your response)
 

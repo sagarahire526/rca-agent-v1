@@ -256,7 +256,12 @@ def traversal_node(state: RCAState) -> dict[str, Any]:
     else:
         try:
             semantic = get_semantic_service()
-            context_data = semantic.get_all_context(traversal_query)
+            gcl_query =(
+                f"{traversal_query} for NAS"
+                if project_type == "NAS"
+                else traversal_query
+            )
+            context_data = semantic.get_all_context(gcl_query)
 
             kpi_hits = len(context_data.get("kpi", []))
             qb_hits  = len(context_data.get("question_bank", []))

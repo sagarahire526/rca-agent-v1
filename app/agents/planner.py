@@ -115,7 +115,12 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     context_data: dict[str, list[dict]] = {}
     try:
         semantic = get_semantic_service()
-        context_data = semantic.get_all_context(refined_query)
+        gcl_query = (
+            f"{refined_query} for NAS"
+            if state.get("project_type") == "NAS"
+            else refined_query
+        )
+        context_data = semantic.get_all_context(gcl_query)
 
         total_hits = sum(len(v) for v in context_data.values())
         if total_hits:
