@@ -175,6 +175,8 @@ class MessageRecord(BaseModel):
     analysis: Optional[Any] = None
     algorithm: Optional[str] = None
     charts: Optional[Any] = None
+    # None for legacy rows that predate the scenario-match flag; True/False once set.
+    scenario_match_found: Optional[bool] = None
     status: str
 
 

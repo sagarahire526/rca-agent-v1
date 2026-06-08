@@ -92,6 +92,7 @@ def _run_stream_thread(
             analysis=final_state.get("semantic_context_data"),
             algorithm=final_state.get("execution_algorithm", ""),
             charts=final_state.get("generated_charts", []),
+            scenario_match_found=final_state.get("scenario_match_found"),
         )
         # Emit heavy payloads as discrete events so the client can render
         # them independently as they arrive.
