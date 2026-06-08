@@ -25,7 +25,11 @@ from services.semantic_service import get_semantic_service
 from services.internal_scenarios import get_internal_scenarios_store
 from prompts.planner_prompt import PLANNER_SYSTEM
 
-_PLAN_TEMPLATE_THRESHOLD = 0.90
+_PLAN_TEMPLATE_THRESHOLD = 0.80
+# Same bar applied to the semantic-search RCA scenarios (which carry no fetch-time
+# floor) so the `scenario_match_found` flag uses one consistent threshold across both
+# sources. See models/state.py:RCAState.scenario_match_found.
+_SEMANTIC_RCA_STRONG_THRESHOLD = 0.80
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +117,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     semantic_context = ""
     rca_guidance = ""
     context_data: dict[str, list[dict]] = {}
+    sim_strong = 0  # count of RCA scenario hits at >= 0.80 (no fetch-time floor)
     try:
         semantic = get_semantic_service()
         gcl_query = (
@@ -121,6 +126,12 @@ def planner_node(state: RCAState) -> dict[str, Any]:
             else refined_query
         )
         context_data = semantic.get_all_context(gcl_query)
+
+        sim_rows = context_data.get("rca", []) or []
+        sim_strong = sum(
+            1 for r in sim_rows
+            if (r.get("similarity_score") or 0) >= _SEMANTIC_RCA_STRONG_THRESHOLD
+        )
 
         total_hits = sum(len(v) for v in context_data.values())
         if total_hits:
@@ -208,6 +219,17 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     except Exception as e:
         logger.warning("Internal scenario lookup failed (non-fatal): %s", e)
 
+    # ── Scenario coverage flag ──
+    # OR semantics: any source at >= 0.80 counts as "grounded in an approved scenario".
+    # The flag is informational — the planner/traversal/response pipeline runs either
+    # way. The UI uses it (via the SSE event and the history endpoint) to render a
+    # "no matching scenario" notice on a miss.
+    scenario_match_found = bool(sim_strong) or (matched_template_meta != {})
+    print(
+        f"  {_DIM}Scenario match flag: {scenario_match_found} "
+        f"(sim_strong={sim_strong}, curated={'yes' if matched_template_meta else 'no'}){_RESET}"
+    )
+
     # ── Step 2: LLM creates the investigation plan ──
     provider = LLMProvider(model="gpt-5", reasoning_effort="medium")
     llm = provider.get_llm()
@@ -286,6 +308,7 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         "planner_semantic_context": semantic_context,
         "semantic_context_data": context_data,
         "matched_plan_template": matched_template_meta,
+        "scenario_match_found": scenario_match_found,
         "current_phase": "response",
         "messages": [{
             "agent": "planner",

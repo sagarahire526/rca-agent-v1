@@ -189,6 +189,8 @@ def ensure_tables() -> None:
             ADD COLUMN IF NOT EXISTS algorithm TEXT;
         ALTER TABLE {_SCHEMA}.rca_agent_queries
             ADD COLUMN IF NOT EXISTS charts JSONB;
+        ALTER TABLE {_SCHEMA}.rca_agent_queries
+            ADD COLUMN IF NOT EXISTS scenario_match_found BOOLEAN;
     """
     try:
         with _conn() as conn:
@@ -320,6 +322,7 @@ def update_query_complete(
     analysis: dict | None = None,
     algorithm: str | None = None,
     charts: dict | None = None,
+    scenario_match_found: bool | None = None,
 ) -> None:
     """
     Finalize a completed query.
@@ -344,17 +347,18 @@ def update_query_complete(
     _exec(
         f"""
         UPDATE {_SCHEMA}.rca_agent_queries SET
-            refined_query      = %s,
-            routing_decision   = %s,
-            planning_rationale = %s,
-            final_response     = %s,
-            completed_at       = NOW(),
-            duration_ms        = %s,
-            traces             = %s,
-            analysis           = %s,
-            algorithm          = %s,
-            charts             = %s,
-            status             = 'complete'
+            refined_query        = %s,
+            routing_decision     = %s,
+            planning_rationale   = %s,
+            final_response       = %s,
+            completed_at         = NOW(),
+            duration_ms          = %s,
+            traces               = %s,
+            analysis             = %s,
+            algorithm            = %s,
+            charts               = %s,
+            scenario_match_found = %s,
+            status               = 'complete'
         WHERE query_id = %s
         """,
         (
@@ -367,6 +371,7 @@ def update_query_complete(
             analysis_json,
             algorithm or None,
             charts_json,
+            scenario_match_found,
             query_id,
         ),
     )
@@ -543,6 +548,7 @@ def get_messages_by_thread(thread_id: str) -> list[dict]:
             analysis,
             algorithm,
             charts,
+            scenario_match_found,
             status
         FROM {_SCHEMA}.rca_agent_queries
         WHERE thread_id = %s

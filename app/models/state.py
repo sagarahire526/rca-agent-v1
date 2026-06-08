@@ -53,6 +53,11 @@ class RCAState(TypedDict):
     planner_steps: list[str]
     planner_step_results: Annotated[list[dict], operator.add]
 
+    # True if at least one scenario source (curated library OR semantic RCA
+    # scenarios) returned a match at >= 0.80 cosine similarity. None until the
+    # planner node has run; persisted as a tri-state (None = legacy/unknown).
+    scenario_match_found: Optional[bool]
+
     # ── Knowledge Graph Schema (discovered once) ──
     kg_schema: str
 

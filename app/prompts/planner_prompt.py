@@ -22,8 +22,8 @@ you write should map to a real question a manager would ask out loud in a review
 ## HARD RULES — apply in order; verify EACH before emitting JSON. These are non-negotiable and override every other instruction below if they conflict.
 ==================================================================================
 
-R1. **SCENARIO FIDELITY.** If a Curated Plan Template (≥ 90% similarity) OR a Matched RCA \
-Scenario (top hit ≥ 85%) is present, your retrieval steps are a SUBSET of that scenario's \
+R1. **SCENARIO FIDELITY.** If a Curated Plan Template (≥ 80% similarity) OR a Matched RCA \
+Scenario (top hit ≥ 80%) is present, your retrieval steps are a SUBSET of that scenario's \
 data-fetch steps, adapted to the user's filters. You may DROP steps; you may NOT ADD steps \
 borrowed from `Relevant KPIs`, `Relevant Keywords`, or `Relevant Questions from KB`. \
 Final retrieval-step count ≤ winning scenario's retrieval-step count.
@@ -54,7 +54,7 @@ breakdown dimension instead.
 ## DECIDE-THEN-PLAN — answer these to yourself BEFORE drafting steps
 ==================================================================================
 
-Q1. **Strong scenario present?** (Curated Plan Template present, OR Matched RCA top hit ≥ 85%) → YES / NO
+Q1. **Strong scenario present?** (Curated Plan Template present, OR Matched RCA top hit ≥ 80%) → YES / NO
     - If YES, note the winning source ("Curated:<tag>" or "RCA:<question_id>") and \
       **N_max** = the number of *retrieval* steps in that scenario (after dropping any \
       synthesis steps).
@@ -81,8 +81,8 @@ The semantic context blocks below are your **only** source of truth for what dat
 retrievable. Two carry pre-vetted scenarios; recognise both by their headers and treat \
 them on equal footing:
 
-- **`## Curated Plan Template (high-confidence match — similarity 90%)`** — sourced from the \
-local **Curated RCA Library**. **Threshold-gated at fetch to ≥ 90%**, so when this block exists \
+- **`## Curated Plan Template (high-confidence match — similarity NN%)`** — sourced from the \
+local **Curated RCA Library**. **Threshold-gated at fetch to ≥ 80%**, so when this block exists \
 it is by definition a strong match. Each entry carries a scenario `tag`, a vetted `question`, \
 and a **`Pre-vetted steps:`** list. **Curated step lists often mix retrieval steps with \
 synthesis / recommendation steps end-to-end** — drop the synthesis ones (R4) and keep the \
@@ -91,11 +91,11 @@ data-fetch ones.
 - **`### Matched RCA Scenarios`** (inside the Semantic Context block) — sourced from the \
 Knowledge-Base RCA scenarios via semantic similarity. Each entry carries a Question ID, a \
 `question`, and SQL / business-logic. Similarity is **not** threshold-gated at fetch, so it \
-ranges from strong to weak. Treat the top hit as strong **only when similarity ≥ 85%**.
+ranges from strong to weak. Treat the top hit as strong **only when similarity ≥ 80%**.
 
 **Selection rule when BOTH blocks are present:** pick the source with the higher similarity \
 score and use its steps as your skeleton. If only the Curated Plan Template is present, that \
-wins. If only `### Matched RCA Scenarios` is present, it wins **only when its top hit is ≥ 85**; \
+wins. If only `### Matched RCA Scenarios` is present, it wins **only when its top hit is ≥ 80**; \
 otherwise fall through to Mode B.
 
 The other semantic blocks — **Relevant KPIs**, **Relevant Questions from KB**, **Relevant \
@@ -107,7 +107,7 @@ Semantic Context : {semantic_context}
 Curated Plan Template : {matched_plan_template}
 
 ==================================================================================
-## MODE A — Strong scenario match (Curated ≥ 90% OR Matched RCA top hit ≥ 85%)
+## MODE A — Strong scenario match (Curated ≥ 80% OR Matched RCA top hit ≥ 80%)
 ==================================================================================
 
 Adopt the winning scenario's **Pre-vetted steps** as your skeleton.
@@ -127,7 +127,7 @@ If NO → drop it."** Do not borrow from `Relevant KPIs` / `Keywords` / `KB Ques
 - `planning_rationale` MUST name: winning source, similarity, N, and your final step count.
 
 ==================================================================================
-## MODE B — Weak / no scenario match (no Curated AND Matched RCA top hit < 85%, or none at all)
+## MODE B — Weak / no scenario match (no Curated AND Matched RCA top hit < 80%, or none at all)
 ==================================================================================
 
 Do **not** force-fit a low-similarity scenario. Build the plan from supporting context using \
@@ -380,7 +380,7 @@ KPI context includes the Workfront funnel.
 
 **Planner output:**
 {{
-    "planning_rationale": "Mode: B | Source: none (top RCA hit 0.62 < 0.85; no Curated) | \
+    "planning_rationale": "Mode: B | Source: none (top RCA hit 0.62 < 0.80; no Curated) | \
 N_max: n/a | Geo grain: MARKET+GC | Metrics: [stuck_at_tower_work_complete count] | Filters: \
 market = CHICAGO, as of {today_date} | Final step count: 1.",
     "steps": [
@@ -398,7 +398,7 @@ Notice: 1 step. Grain = market + GC (user named market). No area drill, no regio
 **User query:** *"Which regions are underperforming on quality based on FTR, revisit rate, and \
 customer rejections, and what targeted improvement actions are required?"*
 
-**Assume:** no Curated Plan Template; top `### Matched RCA Scenarios` hit < 85%; KPI context \
+**Assume:** no Curated Plan Template; top `### Matched RCA Scenarios` hit < 80%; KPI context \
 lists FTR, Revisit Rate, and Customer Rejection as three distinct KPIs.
 
 **Decide-then-Plan answers:** Q1 = NO. Q2 = REGION + GC (user said "regions"). Q3 = [FTR, \
@@ -408,7 +408,7 @@ response agent's job, NOT a planner step (R4).
 
 **Planner output:**
 {{
-    "planning_rationale": "Mode: B | Source: none (top RCA hit < 0.85; no Curated) | N_max: \
+    "planning_rationale": "Mode: B | Source: none (top RCA hit < 0.80; no Curated) | N_max: \
 n/a | Geo grain: REGION+GC | Metrics: [FTR %, Revisit Rate %, Customer Rejection %] | \
 Filters: last 90 days from {today_date} | Final step count: 3. (Improvement-actions synthesis \
 deferred to response agent per R4.)",

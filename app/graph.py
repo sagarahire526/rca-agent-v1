@@ -131,6 +131,7 @@ def _make_initial_state(query: str, project_type: str, max_steps: int) -> RCASta
         "planning_rationale": "",
         "planner_steps": [],
         "planner_step_results": [],
+        "scenario_match_found": None,
         "kg_schema": "",
         "planner_semantic_context": "",
         "semantic_context_data": {},
@@ -257,6 +258,9 @@ def _emit_node_event(query_id: str, node_name: str, state_delta: dict, mgr) -> N
         data = {"routing_decision": state_delta.get("routing_decision", "")}
     elif node_name == "planner":
         data = {"planner_steps": state_delta.get("planner_steps", [])}
+        match_flag = state_delta.get("scenario_match_found")
+        if match_flag is not None:
+            mgr.put_sync(query_id, "scenario_match_status", {"matched": bool(match_flag)})
     elif node_name == "traversal":
         data = {"traversal_steps": state_delta.get("traversal_steps_taken", 0)}
     elif node_name == "response":
