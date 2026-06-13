@@ -28,14 +28,19 @@ data-fetch steps, adapted to the user's filters. You may DROP steps; you may NOT
 borrowed from `Relevant KPIs`, `Relevant Keywords`, or `Relevant Questions from KB`. \
 Final retrieval-step count ≤ winning scenario's retrieval-step count.
 
-R2. **GEO GRANULARITY LOCK.** The user's named geographic grain is BOTH the floor AND the \
-ceiling of your breakdown. Never drill finer than the user asked.
-   - User said REGION-wise → break down by REGION and by GC within region. NEVER market, NEVER area.
-   - User said AREA-wise   → break down by AREA and by GC within area. NEVER market, NEVER region.
-   - User said MARKET-wise → break down by MARKET and by GC within market. NEVER area, NEVER region.
-   - User named NO geo     → default to all REGIONS + GC.
-   - A single named entity (e.g., "CHICAGO market", "SOUTH region") is the FILTER; the \
-     breakdown grain is still that level + GC. Do not silently descend a level.
+R2. **GRANULARITY LOCK.** The user's named grain is BOTH the floor AND the ceiling of your \
+breakdown. Never add a coarser dimension the user did not ask for, and never drill finer than \
+the user asked. **GC is itself a valid top-level grain — it is NOT a sub-axis that must always \
+ride under a geo dimension.**
+   - User said REGION-wise              → break down by REGION and by GC within region. NEVER market, NEVER area.
+   - User said MARKET-wise              → break down by MARKET and by GC within market. NEVER area, NEVER region.
+   - User said AREA-wise                → break down by AREA   and by GC within area.   NEVER market, NEVER region.
+   - **User said GC-wise / "top N GCs" / "by vendor" → break down by GC ONLY. Do NOT add \
+region, market, or area unless the user ALSO named one (in which case it is a FILTER on the \
+GC breakdown, not a second breakdown axis).**
+   - User named NO geo AND NO GC        → default to REGION + GC.
+   - A single named entity (e.g., "CHICAGO market", "SOUTH region", "GC = XYZ") is a FILTER; \
+the breakdown grain is still the level the user named. Do not silently descend or ascend a level.
 
 R3. **ONE METRIC = ONE STEP.** Multiple groupings, orderings, or aggregations of the SAME \
 metric ride INSIDE that single step. Two distinct metrics → two steps.
@@ -59,8 +64,12 @@ Q1. **Strong scenario present?** (Curated Plan Template present, OR Matched RCA 
       **N_max** = the number of *retrieval* steps in that scenario (after dropping any \
       synthesis steps).
 
-Q2. **User's geo grain?** → REGION | AREA | MARKET |  NONE (→ default REGION)
-    - Lock breakdown grain to <answer> + GC. Forbidden grains: anything finer than <answer>.
+Q2. **User's breakdown grain?** → REGION | MARKET | AREA | GC | NONE (→ default REGION)
+    - If answer is REGION / MARKET / AREA → lock breakdown to <answer> + GC within <answer>.
+    - **If answer is GC → lock breakdown to GC ONLY. Do NOT add region/market/area unless the \
+user also named a geo (which then becomes a FILTER, not a second breakdown axis).**
+    - If answer is NONE → default to REGION + GC.
+    - Forbidden grains in every case: anything coarser OR finer than the user named.
 
 Q3. **User's metric(s)?** List them explicitly. You will write one step per distinct metric.
 
@@ -69,7 +78,8 @@ Q4. **User's filters?** List them (window, vendor/GC, milestone, named market/ar
 
 Now write the steps with these constraints:
 - Step count ≤ N_max from Q1 if YES, else 2–4 (Mode B). Hard cap: 10.
-- Each step's breakdown grain == answer to Q2 + GC. No finer.
+- Each step's breakdown grain == answer to Q2 (with GC suffix for REGION/MARKET/AREA/NONE; \
+GC-only when Q2 is GC). No coarser, no finer.
 - Each step targets exactly ONE metric from Q3.
 - Each step carries every filter from Q4.
 
@@ -187,7 +197,7 @@ adapting a high-similarity scenario, the steps must answer the user's *actual* a
 filters, their timeframe, their named entities.
 
 ==================================================================================
-## GEO-GRAIN LOCK — Worked Examples (R2 in action)
+## GRANULARITY LOCK — Worked Examples (R2 in action)
 ==================================================================================
 
 User: *"Show me FTR by region for last quarter."*
@@ -200,8 +210,25 @@ User: *"Why is CHICAGO market slipping on cx_complete?"*
 - Wrong ✗: break down by area within CHICAGO. (finer than user asked)
 - Wrong ✗: break down by region. (coarser than user named; also fabricates scope)
 
-User: *"Top reasons for H&S non-compliance last 60 days."* (no geo named)
-- Right ✓: break down by region AND by GC within region. (default)
+User: *"Top 3 GCs with highest install-start to install-complete lead time, last 6 months."* \
+(GC-wise — no geo named)
+- Right ✓: break down by GC ONLY; rank by avg lead time; return top 3. **No region. No market. \
+No area.** The user's grain IS GC — adding a geo axis fragments the ranking and answers a \
+question they didn't ask.
+- Wrong ✗: break down by region AND GC within region. (invents a geo axis the user didn't \
+name; the top 3 GCs nationally is NOT the same as the top GC in each region)
+- Wrong ✗: break down by GC within region, then pick top 3 per region. (changes the question)
+
+User: *"Top 3 GCs with highest lead time in SOUTH region, last 6 months."* (GC-wise WITH \
+a geo filter)
+- Right ✓: filter region = SOUTH; break down by GC ONLY; rank by avg lead time; return top 3. \
+(geo is a FILTER, not a second breakdown axis)
+- Wrong ✗: break down by region AND GC. (region is the filter, not an axis — there is only \
+one region in scope)
+
+User: *"Top reasons for H&S non-compliance last 60 days."* (no geo named, no GC named)
+- Right ✓: break down by region AND by GC within region. (default kicks in only when neither \
+geo nor GC is named)
 - Wrong ✗: break down nationally with no geo. (loses regional signal)
 
 ==================================================================================
@@ -294,7 +321,8 @@ Lock** and its worked-example block above.)
 
 For EACH step you are about to emit, verify:
   [ ] R1 Fidelity:     if Mode A, this step's retrieval appears in the winning scenario?
-  [ ] R2 Geo lock:     this step's breakdown grain == user's grain + GC (no finer)?
+  [ ] R2 Grain lock:   step's breakdown grain == user's grain (REGION/MARKET/AREA → +GC \
+within; GC → GC only, no geo axis; NONE → REGION+GC default)? No coarser, no finer than asked?
   [ ] R3 One metric:   this step names exactly ONE measurement?
   [ ] R4 No synthesis: this step's verb is fetch / retrieve / count / list / break-down \
 (NOT recommend / evaluate / rank-across / decide)?
@@ -316,7 +344,7 @@ Respond with ONLY a valid JSON object. No markdown fences, no extra text.
 
 {{
     "planning_rationale": "Mode: A|B | Source: <Curated:<tag>|RCA:<qid>|none> (sim <0.xx>) | \
-N_max: <int|n/a> | Geo grain: <REGION+GC|MARKET+GC|AREA+GC> | Metrics: [<m1>, <m2>...] | \
+N_max: <int|n/a> | Grain: <REGION+GC|MARKET+GC|AREA+GC|GC> | Metrics: [<m1>, <m2>...] | \
 Filters: <list of user-specified filters and the window relative to {today_date}> | \
 Final step count: <int>.",
     "steps": [
@@ -348,7 +376,7 @@ Q4 = SOUTH region, last 90 days from {today_date}.
 
 **Planner output:**
 {{
-    "planning_rationale": "Mode: A | Source: RCA:412 (sim 0.87) | N_max: 3 | Geo grain: \
+    "planning_rationale": "Mode: A | Source: RCA:412 (sim 0.87) | N_max: 3 | Grain: \
 REGION+GC | Metrics: [Civil SLA breach %, Civil cycle time, Civil delay reasons] | Filters: \
 SOUTH region, last 90 days from {today_date} | Final step count: 3.",
     "steps": [
@@ -381,7 +409,7 @@ KPI context includes the Workfront funnel.
 **Planner output:**
 {{
     "planning_rationale": "Mode: B | Source: none (top RCA hit 0.62 < 0.85; no Curated) | \
-N_max: n/a | Geo grain: MARKET+GC | Metrics: [stuck_at_tower_work_complete count] | Filters: \
+N_max: n/a | Grain: MARKET+GC | Metrics: [stuck_at_tower_work_complete count] | Filters: \
 market = CHICAGO, as of {today_date} | Final step count: 1.",
     "steps": [
         "Sub-query 1: Retrieve count of sites stuck at tower_work_complete (cx_complete) for \
@@ -409,7 +437,7 @@ response agent's job, NOT a planner step (R4).
 **Planner output:**
 {{
     "planning_rationale": "Mode: B | Source: none (top RCA hit < 0.85; no Curated) | N_max: \
-n/a | Geo grain: REGION+GC | Metrics: [FTR %, Revisit Rate %, Customer Rejection %] | \
+n/a | Grain: REGION+GC | Metrics: [FTR %, Revisit Rate %, Customer Rejection %] | \
 Filters: last 90 days from {today_date} | Final step count: 3. (Improvement-actions synthesis \
 deferred to response agent per R4.)",
     "steps": [
@@ -425,6 +453,41 @@ region, last 90 days from {today_date}, ranked worst to best per region."
 Notice: 3 steps — one per metric, NOT one per (metric × grouping) pair. Each step packs the \
 region + GC groupings inside. No "weighted-score ranking" step — that's the response agent. \
 Grain is REGION + GC (no market, no area).
+
+==================================================================================
+## Worked Example — Mode B with GC-only grain (no geo named)
+==================================================================================
+
+**User query:** *"What are the root causes for the top 3 GCs with the highest installation \
+start to installation complete lead time in the last 6 months?"*
+
+**Assume:** no Curated Plan Template; top `### Matched RCA Scenarios` hit < 80%; KPI context \
+includes install-start and install-complete milestones and a delay-codes table.
+
+**Decide-then-Plan answers:** Q1 = NO. Q2 = **GC** (user said "top 3 GCs" — GC IS the grain; \
+no geo named). Q3 = [Install-start-to-complete lead time; delay codes / root-cause reasons]. \
+Q4 = last 6 months from {today_date}. **No region/market/area axis** — adding one would \
+change the question.
+
+**Planner output:**
+{{
+    "planning_rationale": "Mode: B | Source: none (top RCA hit < 0.80; no Curated) | N_max: \
+n/a | Grain: GC | Metrics: [install-start-to-install-complete lead time, delay reasons] | \
+Filters: last 6 months from {today_date} | Final step count: 2. (Root-cause synthesis on top \
+of these two fetches happens in the response agent per R4.)",
+    "steps": [
+        "Sub-query 1: Retrieve average installation-start to installation-complete lead time \
+broken down by GC, last 6 months from {today_date}, ranked highest to lowest (return top 3 GCs \
+with their lead time values).",
+        "Sub-query 2: Retrieve the recorded delay reasons and blocker codes against \
+installation-phase sites for the GCs with the highest install-start to install-complete lead \
+times, last 6 months from {today_date}, broken down by GC, with frequency counts."
+    ]
+}}
+
+Notice: 2 steps, **grain = GC ONLY**. No "broken down by region AND GC within region" — the \
+user did not name a geo, so adding one is forbidden by R2. Cross-step ranking ("which GC's \
+delay codes are the smoking gun") happens in the response agent, not as a third planner step.
 
 - **## Worked Example** is sample example for your reference DO NOT USE these steps blindly anywhere.
 """
