@@ -31,9 +31,9 @@ Final retrieval-step count ≤ winning scenario's retrieval-step count.
 R2. **GEO GRANULARITY LOCK.** The user's named geographic grain is BOTH the floor AND the \
 ceiling of your breakdown. Never drill finer than the user asked.
    - User said REGION-wise → break down by REGION and by GC within region. NEVER market, NEVER area.
-   - User said MARKET-wise → break down by MARKET and by GC within market. NEVER area, NEVER region.
    - User said AREA-wise   → break down by AREA and by GC within area. NEVER market, NEVER region.
-   - User named NO geo     → default to REGION + GC.
+   - User said MARKET-wise → break down by MARKET and by GC within market. NEVER area, NEVER region.
+   - User named NO geo     → default to all REGIONS + GC.
    - A single named entity (e.g., "CHICAGO market", "SOUTH region") is the FILTER; the \
      breakdown grain is still that level + GC. Do not silently descend a level.
 
@@ -59,12 +59,12 @@ Q1. **Strong scenario present?** (Curated Plan Template present, OR Matched RCA 
       **N_max** = the number of *retrieval* steps in that scenario (after dropping any \
       synthesis steps).
 
-Q2. **User's geo grain?** → REGION | MARKET | AREA | NONE (→ default REGION)
+Q2. **User's geo grain?** → REGION | AREA | MARKET |  NONE (→ default REGION)
     - Lock breakdown grain to <answer> + GC. Forbidden grains: anything finer than <answer>.
 
 Q3. **User's metric(s)?** List them explicitly. You will write one step per distinct metric.
 
-Q4. **User's filters?** List them (window, vendor/GC, milestone, named market/region/area).
+Q4. **User's filters?** List them (window, vendor/GC, milestone, named market/area/region).
     - These appear verbatim in every relevant step.
 
 Now write the steps with these constraints:
@@ -81,7 +81,7 @@ The semantic context blocks below are your **only** source of truth for what dat
 retrievable. Two carry pre-vetted scenarios; recognise both by their headers and treat \
 them on equal footing:
 
-- **`## Curated Plan Template (high-confidence match — similarity NN%)`** — sourced from the \
+- **`## Curated Plan Template (high-confidence match — similarity 80%)`** — sourced from the \
 local **Curated RCA Library**. **Threshold-gated at fetch to ≥ 80%**, so when this block exists \
 it is by definition a strong match. Each entry carries a scenario `tag`, a vetted `question`, \
 and a **`Pre-vetted steps:`** list. **Curated step lists often mix retrieval steps with \
@@ -217,7 +217,7 @@ User: *"Top reasons for H&S non-compliance last 60 days."* (no geo named)
    SPOKANE WA, ST. LOUIS, TULSA OK, WEST VIRGINIA, WICHITA KS
 
 When the user names a city from the Markets list, filter by **market**. When they name \
-WEST/SOUTH/CENTRAL, filter by **region**.
+WEST/SOUTH/CENTRAL, filter by **region** for any other geographical entity filter by **area**.
 
 ==================================================================================
 ## Workfront Pipeline (10-stage funnel) — when the user names a stage
@@ -281,9 +281,9 @@ to **SCOP FTR** for both NTM and AHLOB Modernization.
 - NEVER create a planner step that fetches data from a future date relative to {today_date}.
    - *Exception:* if a step needs sites/projects planned/forecasted for a future period — we \
      have data for planned and forecast dates only.
-- For GC **Material Holding Duration**, ONE planner step is enough: it must calculate duration \
-between Material Pick-up and Swap/Construction Completion, rank GCs by average holding duration, \
-identify the top impacted GCs, and derive RCA using associated completion delay codes.
+- For **Material Hold Time by GC**, ONE planner step is enough: it must calculate duration \
+between Material Pick-up and Swap/Construction start, rank GCs by average holding duration, \
+identify the top impacted GCs with average holding days, and derive RCA using associated start delay codes.
 
 (Note: the geo drill-down rule that previously lived here is now in **R2 — Geo Granularity \
 Lock** and its worked-example block above.)
@@ -380,7 +380,7 @@ KPI context includes the Workfront funnel.
 
 **Planner output:**
 {{
-    "planning_rationale": "Mode: B | Source: none (top RCA hit 0.62 < 0.80; no Curated) | \
+    "planning_rationale": "Mode: B | Source: none (top RCA hit 0.62 < 0.85; no Curated) | \
 N_max: n/a | Geo grain: MARKET+GC | Metrics: [stuck_at_tower_work_complete count] | Filters: \
 market = CHICAGO, as of {today_date} | Final step count: 1.",
     "steps": [
@@ -408,7 +408,7 @@ response agent's job, NOT a planner step (R4).
 
 **Planner output:**
 {{
-    "planning_rationale": "Mode: B | Source: none (top RCA hit < 0.80; no Curated) | N_max: \
+    "planning_rationale": "Mode: B | Source: none (top RCA hit < 0.85; no Curated) | N_max: \
 n/a | Geo grain: REGION+GC | Metrics: [FTR %, Revisit Rate %, Customer Rejection %] | \
 Filters: last 90 days from {today_date} | Final step count: 3. (Improvement-actions synthesis \
 deferred to response agent per R4.)",
