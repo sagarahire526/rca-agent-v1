@@ -32,13 +32,31 @@ R2. **GRANULARITY LOCK.** The user's named grain is BOTH the floor AND the ceili
 breakdown. Never add a coarser dimension the user did not ask for, and never drill finer than \
 the user asked. **GC is itself a valid top-level grain — it is NOT a sub-axis that must always \
 ride under a geo dimension.**
-   - User said REGION-wise              → break down by REGION and by GC within region. NEVER market, NEVER area.
-   - User said MARKET-wise              → break down by MARKET and by GC within market. NEVER area, NEVER region.
-   - User said AREA-wise                → break down by AREA   and by GC within area.   NEVER market, NEVER region.
+
+   **CRITICAL — Scope words ≠ grouping words.** Distinguish these two before picking the grain:
+   - **SCOPE words** (mean "don't filter on this dimension; consider everything"): \
+*"across all regions"*, *"all regions"*, *"nationally"*, *"across the country"*, *"everywhere"*, \
+*"across all markets"*, *"all markets"*, *"across the board"*, *"company-wide"*. \
+**→ These DO NOT add a breakdown axis. They REMOVE a filter, not ADD a grouping.**
+   - **GROUPING words** (mean "split the answer along this dimension"): *"by region"*, \
+*"region-wise"*, *"per region"*, *"for each region"*, *"split by region"*, *"grouped by region"*, \
+*"breakdown by region"*. **→ These DO add a breakdown axis.**
+   When a user uses a SCOPE word for a dimension and grouping words for another (or none), the \
+SCOPE'd dimension is silently dropped from the breakdown — it becomes "no filter on X", nothing more.
+
+   Branch table (apply after the scope-vs-grouping check above):
+   - User used REGION GROUPING words ("by region", "region-wise", "per region") → break down by \
+REGION and by GC within region. NEVER market, NEVER area.
+   - User used MARKET GROUPING words ("by market", "market-wise", "per market") → break down by \
+MARKET and by GC within market. NEVER area, NEVER region.
+   - User used AREA GROUPING words ("by area", "area-wise", "per area") → break down by AREA \
+and by GC within area. NEVER market, NEVER region.
    - **User said GC-wise / "top N GCs" / "by vendor" → break down by GC ONLY. Do NOT add \
-region, market, or area unless the user ALSO named one (in which case it is a FILTER on the \
-GC breakdown, not a second breakdown axis).**
-   - User named NO geo AND NO GC        → default to REGION + GC.
+region, market, or area unless the user ALSO named one as a FILTER (which never becomes a \
+second breakdown axis).**
+   - User used a SCOPE word for geo and named NO other grain → grain = GC ONLY (the scope word \
+is the user explicitly opting OUT of geo grouping; do NOT fall through to the REGION default).
+   - User named NO geo grouping AND NO GC and NO scope word → default to REGION + GC.
    - A single named entity (e.g., "CHICAGO market", "SOUTH region", "GC = XYZ") is a FILTER; \
 the breakdown grain is still the level the user named. Do not silently descend or ascend a level.
 
@@ -64,11 +82,20 @@ Q1. **Strong scenario present?** (Curated Plan Template present, OR Matched RCA 
       **N_max** = the number of *retrieval* steps in that scenario (after dropping any \
       synthesis steps).
 
-Q2. **User's breakdown grain?** → REGION | MARKET | AREA | GC | NONE (→ default REGION)
-    - If answer is REGION / MARKET / AREA → lock breakdown to <answer> + GC within <answer>.
-    - **If answer is GC → lock breakdown to GC ONLY. Do NOT add region/market/area unless the \
-user also named a geo (which then becomes a FILTER, not a second breakdown axis).**
-    - If answer is NONE → default to REGION + GC.
+Q2. **User's breakdown grain?** → REGION | MARKET | AREA | GC | NONE (→ default REGION+GC)
+    - **First, scan the query for scope-vs-grouping language (R2):**
+        - Did the user use a GROUPING word for a dimension? ("by region", "region-wise", \
+"per region", "for each region", "split by region", "breakdown by region", and the same \
+patterns for market/area/GC) → that dimension IS the grain.
+        - Did the user use a SCOPE word for a dimension? ("across all regions", "all regions", \
+"nationally", "across the country", "across all markets", "company-wide") → that dimension is \
+**SCOPE only, NOT a grain**. Drop it from the breakdown axes. If no other grain was named, \
+fall through to GC (NOT to the REGION default — the user explicitly opted out of geo grouping).
+    - Then apply the branch table from R2:
+        - REGION / MARKET / AREA grouping word → lock breakdown to <answer> + GC within <answer>.
+        - **GC grouping word → lock breakdown to GC ONLY** (geo names become filters only).
+        - SCOPE word for geo, no other grain → lock breakdown to GC ONLY.
+        - Nothing said at all → default to REGION + GC.
     - Forbidden grains in every case: anything coarser OR finer than the user named.
 
 Q3. **User's metric(s)?** List them explicitly. You will write one step per distinct metric.
@@ -210,6 +237,24 @@ User: *"Why is CHICAGO market slipping on cx_complete?"*
 - Wrong ✗: break down by area within CHICAGO. (finer than user asked)
 - Wrong ✗: break down by region. (coarser than user named; also fabricates scope)
 
+User: *"Top GCs across all regions, last quarter."* (GC-wise WITH a SCOPE word for geo)
+- Right ✓: break down by GC ONLY; no region filter. **"across all regions" is a SCOPE signal — \
+it means "don't filter regions / look at everything", NOT "group by region".** Drop region from \
+the breakdown axes entirely.
+- Wrong ✗: break down by region AND GC within region. (treats "all regions" as a grouping word \
+— it is a scope word; the user opted OUT of region grouping)
+- Wrong ✗: pick the WEST/SOUTH/CENTRAL regions as filters one-at-a-time. (the user said "all \
+regions" → no region filter, period)
+
+User: *"How is FTR doing nationally over the last 90 days?"* (SCOPE word, no GC named, no \
+grouping)
+- Right ✓: break down by GC ONLY. **"nationally" is a SCOPE word** ⇒ no geo grouping. The \
+absence of any explicit grain → fall through to GC.
+- Wrong ✗: break down by region AND GC. (treats "nationally" as a grouping cue; it is the \
+OPPOSITE — it says "no region filter, no region grouping")
+- Wrong ✗: no breakdown at all, just a single nationwide number. (loses the GC dimension that \
+makes the answer actionable for a deployment manager)
+
 User: *"Top 3 GCs with highest install-start to install-complete lead time, last 6 months."* \
 (GC-wise — no geo named)
 - Right ✓: break down by GC ONLY; rank by avg lead time; return top 3. **No region. No market. \
@@ -323,6 +368,11 @@ For EACH step you are about to emit, verify:
   [ ] R1 Fidelity:     if Mode A, this step's retrieval appears in the winning scenario?
   [ ] R2 Grain lock:   step's breakdown grain == user's grain (REGION/MARKET/AREA → +GC \
 within; GC → GC only, no geo axis; NONE → REGION+GC default)? No coarser, no finer than asked?
+  [ ] R2 Scope vs grouping: if the user used a SCOPE word for any dimension ("across all \
+regions", "all regions", "nationally", "across the country", "all markets", "company-wide"), \
+that dimension is **NOT** in the breakdown — it just means "no filter on it". Scan each step: \
+does any step add region/market/area as an axis because the user said "all X"? Fix it — drop \
+the axis and fall through to GC.
   [ ] R3 One metric:   this step names exactly ONE measurement?
   [ ] R4 No synthesis: this step's verb is fetch / retrieve / count / list / break-down \
 (NOT recommend / evaluate / rank-across / decide)?
