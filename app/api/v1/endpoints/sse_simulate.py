@@ -22,6 +22,7 @@ import services.db_service as db_svc
 from graph import stream_rca
 from services.sse_manager import sse_manager
 from services.trace_builder import build_traces
+from services.json_safe import safe_dumps
 from api.v1.schemas import ProjectType
 
 logger = logging.getLogger(__name__)
@@ -144,7 +145,23 @@ async def _event_generator(
             event_name = item["event"]
             if event_name == "__done__":
                 break
-            yield f"event: {event_name}\ndata: {json.dumps(item['data'])}\n\n"
+            # Serialize with the SAME safe serializer the DB write uses, so a
+            # payload that persisted to the DB always serializes for the stream
+            # too (NaN/Infinity stripped, exotic types str()-ed). The per-event
+            # try/except is defense-in-depth: even if one payload somehow still
+            # fails, it must never truncate the stream — `complete`/`__done__`
+            # are guaranteed to reach the client so it never gets stuck.
+            try:
+                payload = safe_dumps(item["data"])
+            except Exception:
+                logger.exception(
+                    "SSE serialization failed [query=%s event=%s] — emitting error marker",
+                    query_id, event_name,
+                )
+                payload = json.dumps(
+                    {"_serialization_error": True, "event": event_name}
+                )
+            yield f"event: {event_name}\ndata: {payload}\n\n"
             if event_name == "error":
                 break
     finally:

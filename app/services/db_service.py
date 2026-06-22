@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import uuid
 from contextlib import contextmanager
 
@@ -24,6 +23,7 @@ import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
 
 import config
+from services.json_safe import safe_dumps as _dumps_safe
 
 logger = logging.getLogger(__name__)
 
@@ -64,24 +64,6 @@ def close_pool() -> None:
 # ─────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────
-
-def _sanitize_json(value):
-    """Replace NaN/Infinity floats with None — PostgreSQL JSON rejects them."""
-    if isinstance(value, float):
-        if math.isnan(value) or math.isinf(value):
-            return None
-        return value
-    if isinstance(value, dict):
-        return {k: _sanitize_json(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_sanitize_json(item) for item in value]
-    return value
-
-
-def _dumps_safe(value, **kwargs) -> str:
-    """json.dumps that strips NaN/Infinity so PostgreSQL JSONB will accept it."""
-    return json.dumps(_sanitize_json(value), **kwargs)
-
 
 def _unwrap_string_encoded_json(value):
     """
