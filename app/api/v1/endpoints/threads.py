@@ -13,7 +13,13 @@ import uuid
 from fastapi import APIRouter, HTTPException, Query
 
 import services.db_service as db_svc
-from api.v1.schemas import CreateThreadRequest, ThreadSummary, MessageRecord, ClarificationStatus
+from api.v1.schemas import (
+    AgentType,
+    CreateThreadRequest,
+    ThreadSummary,
+    MessageRecord,
+    ClarificationStatus,
+)
 
 router = APIRouter(prefix="/threads", tags=["Threads"])
 
@@ -28,27 +34,40 @@ def create_thread(req: CreateThreadRequest):
     The returned thread_id is then passed to /simulate or /simulate/stream.
     """
     thread_id = str(uuid.uuid4())
-    db_svc.upsert_thread(thread_id, req.user_id, req.thread_name)
+    db_svc.upsert_thread(thread_id, req.user_id, req.thread_name, req.agent_type.value)
     thread = db_svc.get_thread(thread_id)
     return thread
 
 
 @router.get("", response_model=list[ThreadSummary])
-def list_threads(user_id: str = Query(..., description="Filter threads by user ID")):
+def list_threads(
+    user_id: str = Query(..., description="Filter threads by user ID"),
+    agent_type: AgentType = Query(
+        AgentType.RCA,
+        description="Only return threads belonging to this agent (rca | recommendation)",
+    ),
+):
     """
-    Return all threads belonging to a user, most recently active first.
-    Each thread includes a count of total queries made within it.
+    Return all threads belonging to a user for a single agent, most recently
+    active first. Each thread includes a count of total queries made within it.
+    Filtering by agent_type keeps RCA and Recommendation threads separate.
     """
-    return db_svc.get_threads_by_user(user_id)
+    return db_svc.get_threads_by_user(user_id, agent_type.value)
 
 
 @router.get("/{thread_id}", response_model=ThreadSummary)
-def get_thread(thread_id: str):
+def get_thread(
+    thread_id: str,
+    agent_type: AgentType = Query(
+        AgentType.RCA,
+        description="Only return the thread if it belongs to this agent (rca | recommendation)",
+    ),
+):
     """
     Return metadata for a single thread.
-    Returns 404 if the thread does not exist.
+    Returns 404 if the thread does not exist or belongs to a different agent.
     """
-    thread = db_svc.get_thread(thread_id)
+    thread = db_svc.get_thread(thread_id, agent_type.value)
     if not thread:
         raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
     return thread
@@ -66,14 +85,20 @@ def delete_thread(thread_id: str):
 
 
 @router.get("/{thread_id}/messages", response_model=list[MessageRecord])
-def get_messages(thread_id: str):
+def get_messages(
+    thread_id: str,
+    agent_type: AgentType = Query(
+        AgentType.RCA,
+        description="Only return messages if the thread belongs to this agent (rca | recommendation)",
+    ),
+):
     """
     Return all queries for a thread in chronological order (oldest first).
     Each record includes the original query, refined query, routing decision,
     planner steps, final response, and timing metadata.
-    Returns 404 if the thread does not exist.
+    Returns 404 if the thread does not exist or belongs to a different agent.
     """
-    thread = db_svc.get_thread(thread_id)
+    thread = db_svc.get_thread(thread_id, agent_type.value)
     if not thread:
         raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
     return db_svc.get_messages_by_thread(thread_id)

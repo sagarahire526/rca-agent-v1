@@ -23,7 +23,7 @@ from graph import stream_rca
 from services.sse_manager import sse_manager
 from services.trace_builder import build_traces
 from services.json_safe import safe_dumps
-from api.v1.schemas import ProjectType
+from api.v1.schemas import AgentType, ProjectType
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +52,11 @@ def _run_stream_thread(
     query_id: str,
     thread_id: str,
     user_id: str,
+    agent_type: str,
 ) -> None:
     t0 = time.perf_counter()
 
-    db_svc.upsert_thread(thread_id, user_id)
+    db_svc.upsert_thread(thread_id, user_id, agent_type=agent_type)
     db_svc.auto_name_thread(thread_id, query)
     db_svc.create_query(query_id, thread_id, user_id, query)
 
@@ -76,6 +77,7 @@ def _run_stream_thread(
             mgr=sse_manager,
             project_type=project_type,
             on_hitl=_on_hitl,
+            agent_type=agent_type,
         )
         duration_ms = round((time.perf_counter() - t0) * 1000, 1)
 
@@ -174,6 +176,9 @@ async def stream_analyze(
     user_id:      str = Query(..., description="User identifier"),
     project_type: ProjectType = Query(..., description="Project type"),
     thread_id:    str = Query(None, description="Conversation thread ID"),
+    agent_type:   AgentType = Query(
+        AgentType.RCA, description="Owning agent (rca | recommendation)"
+    ),
 ):
     """Start a streaming RCA investigation. Returns text/event-stream."""
     if not query.strip():
@@ -191,7 +196,7 @@ async def stream_analyze(
     loop.run_in_executor(
         _RCA_EXECUTOR,
         _run_stream_thread,
-        query, project_type.value, query_id, thread_id, user_id,
+        query, project_type.value, query_id, thread_id, user_id, agent_type.value,
     )
 
     async def _stream_with_preamble() -> AsyncGenerator[str, None]:

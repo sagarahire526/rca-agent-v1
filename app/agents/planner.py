@@ -45,6 +45,120 @@ _PLANNER_STEP_MAX_STEPS = 20
 _STEP_TIMEOUT_SEC = 300
 
 
+# ── Deterministic scenario-node bypass ───────────────────────────────────────
+
+def _fetch_scenario_node_match(query: str, project_type: str, agent_type: str) -> dict | None:
+    """Look up a matching entity_type='scenario' GRAPH node owned by ``agent_type``
+    (embedding search sliced to that agent's scenario nodes, gated on the node's own
+    scn_similarity_threshold). Returns {node_id, label, score, threshold} or None.
+    Non-fatal on any error."""
+    try:
+        from services.schema_embedding_service import search_scenarios
+        return search_scenarios(query, project_type=project_type, agent_type=agent_type)
+    except Exception as e:
+        logger.warning("Scenario-node match failed (non-fatal): %s", e)
+        return None
+
+
+def _fetch_scenario_param_schema(node_id: str) -> dict | None:
+    """Fetch + parse a scenario node's `scn_param_schema` from Neo4j. Returns the parsed
+    dict (expected to carry a `fields` list for schema-driven extraction), or None if
+    absent/legacy/unparseable. Non-fatal on any error."""
+    try:
+        from tools.neo4j_tool import Neo4jTool
+        out = Neo4jTool().run_cypher_safe(
+            "MATCH (n:BKGNode {node_id: $nid}) RETURN coalesce(n.scn_param_schema, '') AS s",
+            {"nid": node_id},
+        )
+        records = (out.get("records") or out.get("results") or []) if isinstance(out, dict) else []
+        raw = (records[0].get("s") if records else "") or ""
+        schema = json.loads(raw) if raw.strip() else None
+        return schema if isinstance(schema, dict) else None
+    except Exception as e:
+        logger.warning("Scenario param-schema fetch failed (non-fatal): %s", e)
+        return None
+
+
+def _run_scenario_bypass(scenario_match: dict, query: str, project_type: str = "") -> dict | None:
+    """Deterministically execute a matched scenario node — NO planner LLM, NO traversal
+    LLM. Extracts scope params (constrained), runs the scenario's orchestrator via the
+    sandbox `run_scenario` helper, and returns a planner_step_results-shaped payload.
+    Returns None to fall through to the normal LLM planning path on any failure.
+
+    `project_type` is the user's explicit selection; it is resolved to the scenario's
+    `smp_name` scope deterministically (not LLM-extracted)."""
+    try:
+        import time as _time
+        from services.scenario_params import extract_scenario_params, extract_params_by_schema
+        from tools.python_sandbox import PythonSandbox
+
+        scn_id = scenario_match["node_id"]
+
+        # If the node declares a `fields` schema, use the GENERIC schema-driven extractor
+        # (no per-scenario few-shots); otherwise fall back to the legacy extractor.
+        schema = _fetch_scenario_param_schema(scn_id)
+        if isinstance(schema, dict) and schema.get("fields"):
+            params = extract_params_by_schema(query, schema, project_type=project_type)
+        else:
+            params = extract_scenario_params(query, project_type=project_type)
+
+        print(
+            f"  {_CYAN}Scenario params{_RESET} "
+            f"{_DIM}(node={scn_id}){_RESET}\n{json.dumps(params, indent=2)}",
+            flush=True,
+        )
+        logger.info("Scenario params (%s): %s", scn_id, json.dumps(params))
+
+        # Pass params as JSON data (no code injection) into the sandbox call.
+        payload = json.dumps({
+            "scenario_id": scn_id,
+            "filter": params["filter"],
+            "group_by": params["group_by"],
+        })
+        code = (
+            "import json as _json\n"
+            f"_p = _json.loads({payload!r})\n"
+            "result = run_scenario(_p['scenario_id'], _p['filter'], _p['group_by'])"
+        )
+
+        t0 = _time.perf_counter()
+        out = PythonSandbox().execute(code, timeout_seconds=120)
+        dt = (_time.perf_counter() - t0) * 1000.0
+
+        if out.get("status") != "success":
+            logger.warning("Scenario bypass execution error: %s", out.get("error"))
+            return None
+
+        result = out.get("result") or {}
+        preds = result.get("predictions", []) if isinstance(result, dict) else []
+
+        step = {
+            "traversal_findings": (
+                f"Executed approved scenario '{scenario_match.get('label', scn_id)}' "
+                f"deterministically. Resolved scope: {json.dumps(params.get('resolved', {}))}."
+            ),
+            "traversal_tool_calls": [{
+                "tool_name": "run_scenario",
+                "tool_input": {
+                    "scenario_id": scn_id,
+                    "filter": params["filter"],
+                    "group_by": params["group_by"],
+                },
+                "tool_output": result,
+                "status": "success",
+                "execution_time_ms": round(dt, 1),
+            }],
+            "traversal_steps_taken": 1,
+            "scenario_full_result": result,
+            "scenario_label": scenario_match.get("label", "scenario"),
+            "scenario_resolved": params.get("resolved", {}),
+        }
+        return {"step_result": step, "resolved_params": params, "row_count": len(preds)}
+    except Exception as e:
+        logger.warning("Scenario bypass failed (falling back to planner): %s", e)
+        return None
+
+
 def _parse_planner_response(content: str) -> tuple[str, list[str]]:
     try:
         clean = content.strip()
@@ -112,6 +226,47 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     print(f"  PLANNER AGENT — Decomposing RCA query into investigation steps")
     print(f"{'=' * 70}{_RESET}\n")
     print(f"  {_DIM}Query: {refined_query}{_RESET}\n")
+
+    # ── Step 0: Deterministic scenario-node bypass (fast path) ──
+    # If an entity_type='scenario' GRAPH node owned by this agent (scn_agent_type ==
+    # state.agent_type) matches >= its own threshold, run it deterministically — no
+    # planner LLM, no traversal LLM. The scenario's orchestrator calls its contributing
+    # nodes with fixed group_by/filters, so grouping/filtering/computation are fully
+    # repeatable (the consistency path).
+    # Match on the RAW user query, not the refined one: a scenario's canonical question
+    # is written in the user's own phrasing, and the refiner's normalization can drift a
+    # verbatim query below the similarity threshold. Param extraction below still uses
+    # refined_query (entity names normalized, which the filters need to be case-correct).
+    agent_type = state.get("agent_type") or "rca"
+    scenario_match_query = state.get("user_query") or refined_query
+    scenario_node = _fetch_scenario_node_match(
+        scenario_match_query, state.get("project_type", ""), agent_type
+    )
+    if scenario_node:
+        bypass = _run_scenario_bypass(scenario_node, refined_query, state.get("project_type", ""))
+        if bypass is not None:
+            print(
+                f"  {_GREEN}Deterministic scenario bypass: '{scenario_node.get('label')}' "
+                f"(sim {scenario_node.get('score')}) — skipping LLM planner + traversal{_RESET}"
+            )
+            return {
+                "planning_rationale": f"Deterministic scenario bypass: {scenario_node.get('label')}",
+                "planner_steps": [f"Scenario: {scenario_node.get('label')}"],
+                "planner_step_results": [bypass["step_result"]],
+                "rca_scenario_guidance": "",
+                "planner_semantic_context": "",
+                "semantic_context_data": {},
+                "scenario_match_found": True,
+                "current_phase": "response",
+                "messages": [{
+                    "agent": "planner",
+                    "content": (
+                        f"Deterministic scenario '{scenario_node.get('label')}' executed "
+                        f"({bypass['row_count']} rows); LLM planning + traversal bypassed. "
+                        f"Resolved scope: {bypass['resolved_params']['resolved']}."
+                    ),
+                }],
+            }
 
     # ── Step 1: Fetch semantic context ──
     semantic_context = ""

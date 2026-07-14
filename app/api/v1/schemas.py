@@ -18,6 +18,14 @@ class ProjectType(str, Enum):
     NAS = "NAS"
 
 
+class AgentType(str, Enum):
+    """Which agent a thread/query belongs to. Keeps RCA and Recommendation
+    conversations isolated — a thread created under one agent never surfaces
+    in the other agent's thread list."""
+    RCA = "rca"
+    RECOMMENDATION = "recommendation"
+
+
 # ── Analyze (RCA) ────────────────────────────────────────────────────────────
 
 class AnalyzeRequest(BaseModel):
@@ -25,6 +33,7 @@ class AnalyzeRequest(BaseModel):
     query: str
     project_type: ProjectType
     thread_id: Optional[str] = None
+    agent_type: AgentType = AgentType.RCA
 
     model_config = {
         "json_schema_extra": {
@@ -33,6 +42,7 @@ class AnalyzeRequest(BaseModel):
                 "query": "Which regions have the highest H&S non-compliance in the last 60 days?",
                 "project_type": "NTM",
                 "thread_id": "session-abc-123",
+                "agent_type": "rca",
             }
         }
     }
@@ -138,12 +148,14 @@ class SemanticRetrieveResponse(BaseModel):
 class CreateThreadRequest(BaseModel):
     user_id: str
     thread_name: str
+    agent_type: AgentType = AgentType.RCA
 
     model_config = {
         "json_schema_extra": {
             "example": {
                 "user_id": "user-001",
                 "thread_name": "H&S non-compliance investigation",
+                "agent_type": "rca",
             }
         }
     }
@@ -153,6 +165,8 @@ class ThreadSummary(BaseModel):
     thread_id: str
     user_id: str
     thread_name: Optional[str] = None
+    # None for legacy threads created before agent tagging (shared by both agents).
+    agent_type: Optional[str] = None
     created_at: Any
     last_active_at: Any
     status: str

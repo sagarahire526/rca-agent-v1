@@ -44,6 +44,11 @@ class RCAState(TypedDict):
     # ── Project type filter ──
     project_type: str            # "NTM" | "AHLOB Modernization" | "Both" | "NAS" | ""
 
+    # ── Owning agent ──
+    # "rca" | "recommendation" — selects which scenario nodes (scn_agent_type) are
+    # eligible for the deterministic scenario bypass, keeping the two agents isolated.
+    agent_type: str
+
     # ── Orchestrator routing ──
     routing_decision: str        # "greeting" | "rca" | "traversal"
     routing_context: str         # For greeting: direct response text

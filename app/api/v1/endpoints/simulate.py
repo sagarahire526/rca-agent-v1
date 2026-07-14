@@ -28,7 +28,7 @@ def analyze(req: AnalyzeRequest):
     """
     thread_id = req.thread_id or str(uuid.uuid4())
     try:
-        result = rca_svc.run_query(req.query, project_type=req.project_type.value, thread_id=thread_id, user_id=req.user_id)
+        result = rca_svc.run_query(req.query, project_type=req.project_type.value, thread_id=thread_id, user_id=req.user_id, agent_type=req.agent_type.value)
         return AnalyzeResponse(thread_id=thread_id, **result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -173,6 +173,27 @@ def ensure_tables() -> None:
             ADD COLUMN IF NOT EXISTS charts JSONB;
         ALTER TABLE {_SCHEMA}.rca_agent_queries
             ADD COLUMN IF NOT EXISTS scenario_match_found BOOLEAN;
+
+        DO $$ BEGIN
+            CREATE TYPE {_SCHEMA}.rca_agent_type AS ENUM ('rca', 'recommendation');
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+        -- Added NULLABLE with NO default on purpose: pre-existing threads were a
+        -- mix of both agents, and we cannot know which is which, so they stay
+        -- NULL rather than being wrongly stamped 'rca'. NULL == "legacy /
+        -- unknown agent" and, per the read filters below, surfaces in BOTH
+        -- agents' lists so no old thread is ever lost. Every thread created from
+        -- here on is stamped explicitly on insert (see upsert_thread).
+        ALTER TABLE {_SCHEMA}.rca_agent_threads
+            ADD COLUMN IF NOT EXISTS agent_type {_SCHEMA}.rca_agent_type;
+
+        -- Corrective for any DB that already ran an earlier NOT NULL DEFAULT 'rca'
+        -- version of this migration: make the column nullable again and drop the
+        -- default so future inserts must supply the value.
+        ALTER TABLE {_SCHEMA}.rca_agent_threads
+            ALTER COLUMN agent_type DROP NOT NULL;
+        ALTER TABLE {_SCHEMA}.rca_agent_threads
+            ALTER COLUMN agent_type DROP DEFAULT;
     """
     try:
         with _conn() as conn:
@@ -230,17 +251,28 @@ def _fetch_row(sql: str, params: tuple) -> dict | None:
 # threads
 # ─────────────────────────────────────────────
 
-def upsert_thread(thread_id: str, user_id: str, thread_name: str | None = None) -> None:
-    """Create thread if new; on conflict refresh last_active_at and set status=active."""
+def upsert_thread(
+    thread_id: str,
+    user_id: str,
+    thread_name: str | None = None,
+    agent_type: str = "rca",
+) -> None:
+    """
+    Create thread if new; on conflict refresh last_active_at and set status=active.
+
+    agent_type ('rca' | 'recommendation') is set only on first insert — it is
+    intentionally NOT touched on conflict, so a thread never changes ownership
+    once created (a later stream upsert can't relabel it).
+    """
     _exec(
         f"""
         INSERT INTO {_SCHEMA}.rca_agent_threads
-            (thread_id, user_id, thread_name, created_at, last_active_at, status)
-        VALUES (%s, %s, %s, NOW(), NOW(), 'active')
+            (thread_id, user_id, thread_name, agent_type, created_at, last_active_at, status)
+        VALUES (%s, %s, %s, %s, NOW(), NOW(), 'active')
         ON CONFLICT (thread_id)
         DO UPDATE SET last_active_at = NOW(), status = 'active'
         """,
-        (thread_id, user_id, thread_name),
+        (thread_id, user_id, thread_name, agent_type),
     )
 
 
@@ -436,46 +468,68 @@ def update_hitl_answered(
 # Read queries (used by threads endpoints)
 # ─────────────────────────────────────────────
 
-def get_threads_by_user(user_id: str) -> list[dict]:
-    """Return all threads for a user, most recent first, with query count."""
+def get_threads_by_user(user_id: str, agent_type: str = "rca") -> list[dict]:
+    """
+    Return all threads for a user under a single agent, most recent first,
+    with query count. Filtering on agent_type is what keeps RCA threads out of
+    the Recommendation agent's list and vice versa.
+
+    Legacy threads with agent_type IS NULL (created before agent tagging, when
+    the two agents shared threads) are returned to BOTH agents so no old thread
+    is ever lost to the user.
+    """
     return _fetch_rows(
         f"""
         SELECT
             t.thread_id,
             t.user_id,
             t.thread_name,
+            t.agent_type,
             t.created_at,
             t.last_active_at,
             t.status,
             COUNT(q.query_id) AS total_queries
         FROM {_SCHEMA}.rca_agent_threads t
         LEFT JOIN {_SCHEMA}.rca_agent_queries q ON q.thread_id = t.thread_id
-        WHERE t.user_id = %s
+        WHERE t.user_id = %s AND (t.agent_type = %s OR t.agent_type IS NULL)
         GROUP BY t.thread_id
         ORDER BY t.last_active_at DESC
         """,
-        (user_id,),
+        (user_id, agent_type),
     )
 
 
-def get_thread(thread_id: str) -> dict | None:
-    """Return a single thread's metadata plus query count."""
+def get_thread(thread_id: str, agent_type: str | None = None) -> dict | None:
+    """
+    Return a single thread's metadata plus query count.
+
+    When agent_type is given, the thread is only returned if it belongs to that
+    agent — so an RCA request can never read a Recommendation thread by ID (and
+    vice versa). A mismatch returns None, indistinguishable from "not found".
+    Legacy threads (agent_type IS NULL) are accessible under either agent.
+    """
+    where = "WHERE t.thread_id = %s"
+    params: tuple = (thread_id,)
+    if agent_type is not None:
+        where += " AND (t.agent_type = %s OR t.agent_type IS NULL)"
+        params = (thread_id, agent_type)
     return _fetch_row(
         f"""
         SELECT
             t.thread_id,
             t.user_id,
             t.thread_name,
+            t.agent_type,
             t.created_at,
             t.last_active_at,
             t.status,
             COUNT(q.query_id) AS total_queries
         FROM {_SCHEMA}.rca_agent_threads t
         LEFT JOIN {_SCHEMA}.rca_agent_queries q ON q.thread_id = t.thread_id
-        WHERE t.thread_id = %s
+        {where}
         GROUP BY t.thread_id
         """,
-        (thread_id,),
+        params,
     )
 
 

@@ -50,6 +50,7 @@ def run_query(
     project_type: str = "",
     thread_id: str = "default",
     user_id: str = "anonymous",
+    agent_type: str = "rca",
 ) -> dict:
     """Start a new RCA investigation."""
     if not query.strip():
@@ -58,14 +59,14 @@ def run_query(
     query_id = str(uuid.uuid4())
     t0 = time.perf_counter()
 
-    db_svc.upsert_thread(thread_id, user_id)
+    db_svc.upsert_thread(thread_id, user_id, agent_type=agent_type)
     db_svc.create_query(query_id, thread_id, user_id, query)
     db_svc.auto_name_thread(thread_id, query)
 
     logger.info("Starting RCA query [thread=%s query=%s]: %.80s", thread_id, query_id, query)
 
     try:
-        state = run_rca(query, project_type=project_type, thread_id=thread_id)
+        state = run_rca(query, project_type=project_type, thread_id=thread_id, agent_type=agent_type)
     except Exception:
         duration_ms = round((time.perf_counter() - t0) * 1000, 1)
         db_svc.update_query_error(query_id, duration_ms)
