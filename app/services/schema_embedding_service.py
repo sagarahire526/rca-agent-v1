@@ -300,6 +300,20 @@ def search_schema(query: str, top_k: int = DEFAULT_TOP_K, project_type: str = ""
 
 
 # ── Scenario-node matching (deterministic scenario bypass) ───────────────────
+#
+# Two-stage match, mirroring the simulation agent:
+#   1. search_scenario_candidates() — embedding RECALL: every scenario node owned by the
+#      requesting agent whose cosine similarity clears SCENARIO_RECALL_FLOOR.
+#   2. services.scenario_selector.select_scenario() — an LLM re-ranker picks the ONE
+#      scenario that answers the query, or none.
+# Similarity alone can't be the gate: only the canonical question is embedded (see
+# scripts/compose_and_embed.compose_text), so the same question in the user's own wording
+# drifts below the node's scn_similarity_threshold and the scenario is silently missed.
+# Recall is therefore loose and the final call is made on meaning.
+
+# Recall floor for the two-stage scenario match; an LLM re-ranker makes the final pick.
+SCENARIO_RECALL_FLOOR = 0.60
+
 
 def _scenario_threshold(node_id: str, default: float = 0.75) -> float:
     """Fetch a scenario node's own ``scn_similarity_threshold`` from Neo4j (per-node
@@ -318,6 +332,20 @@ def _scenario_threshold(node_id: str, default: float = 0.75) -> float:
     return default
 
 
+def _scenario_index(node_rows: list[dict], agent_type: str) -> list[int]:
+    """Positions of ``entity_type='scenario'`` nodes owned by ``agent_type``.
+
+    The ``scn_agent_type`` slice is what keeps each agent's scenarios isolated in the
+    shared graph (``rca`` vs ``recommendation`` vs the simulation agent's own).
+    """
+    want = (agent_type or "rca").strip().lower()
+    return [
+        i for i, r in enumerate(node_rows)
+        if (r.get("entity_type") or "").lower() == "scenario"
+        and (r.get("scn_agent_type") or "").lower() == want
+    ]
+
+
 def search_scenarios(
     query: str,
     *,
@@ -326,15 +354,16 @@ def search_scenarios(
     session_id: str | None = None,
     default_threshold: float = 0.75,
 ) -> dict | None:
-    """Match a query against ``entity_type='scenario'`` nodes owned by ``agent_type`` ONLY.
+    """Single-match scenario lookup gated purely on similarity — LEGACY.
 
-    Slices the node index to scenario nodes whose ``scn_agent_type`` equals the
-    requesting agent (``rca`` vs ``recommendation`` — this is what keeps each agent's
-    scenarios isolated in the shared graph), computes cosine similarity, and returns the
-    top match ``{node_id, label, score, threshold}`` when its score clears the node's own
-    ``scn_similarity_threshold`` (fallback ``default_threshold``). Returns None if there
-    are no eligible scenario nodes or none clear the threshold — the caller then falls
-    through to the normal planner flow.
+    Returns the top ``entity_type='scenario'`` node owned by ``agent_type`` as
+    ``{node_id, label, score, threshold}`` when its score clears the node's own
+    ``scn_similarity_threshold`` (fallback ``default_threshold``), else None.
+
+    The planner no longer uses this: a threshold gate on the top hit misses a scenario
+    asked in different wording, which is exactly what the two-stage
+    search_scenario_candidates() + scenario_selector path fixes. Kept for consistency
+    scripts that need the deterministic pre-router behaviour.
     """
     if session_id is None:
         session_id = _session_id_for(project_type or "")
@@ -343,12 +372,7 @@ def search_scenarios(
     if not node_rows:
         return None
 
-    want = (agent_type or "rca").strip().lower()
-    scen_idx = [
-        i for i, r in enumerate(node_rows)
-        if (r.get("entity_type") or "").lower() == "scenario"
-        and (r.get("scn_agent_type") or "").lower() == want
-    ]
+    scen_idx = _scenario_index(node_rows, agent_type)
     if not scen_idx:
         return None
 
@@ -365,10 +389,118 @@ def search_scenarios(
 
     logger.info(
         "search_scenarios [agent=%s session=%s]: top='%s' score=%.4f threshold=%.2f -> %s",
-        want, session_id, label, best_score, threshold,
+        agent_type, session_id, label, best_score, threshold,
         "MATCH" if best_score >= threshold else "below",
     )
 
     if best_score >= threshold:
         return {"node_id": node_id, "label": label, "score": round(best_score, 4), "threshold": threshold}
     return None
+
+
+def _fetch_scenario_texts(node_ids: list[str], session_id: str) -> dict[str, dict[str, str]]:
+    """Fetch scn_canonical_question / definition / nl_description (from props) per node_id.
+
+    Read from ``props`` rather than the embedded ``composed_text`` because the selector
+    judges on what a scenario COMPUTES — the definition / nl_description — not just the
+    canonical question that was embedded.
+    """
+    if not node_ids:
+        return {}
+    conn = _pg_emb_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"SELECT node_id, props FROM {_PG_SCHEMA}.nodes "
+                "WHERE session_id = %s AND node_id = ANY(%s)",
+                (session_id, node_ids),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    out: dict[str, dict[str, str]] = {}
+    for r in rows:
+        props = r["props"] or {}
+        out[r["node_id"]] = {
+            "scn_canonical_question": (props.get("scn_canonical_question") or "").strip(),
+            "definition": (props.get("definition") or "").strip(),
+            "nl_description": (props.get("nl_description") or "").strip(),
+        }
+    return out
+
+
+def search_scenario_candidates(
+    query: str,
+    *,
+    project_type: str | None = None,
+    agent_type: str = "rca",
+    session_id: str | None = None,
+    floor: float = SCENARIO_RECALL_FLOOR,
+    top_k: int = 8,
+) -> list[dict]:
+    """Recall stage of the two-stage scenario match.
+
+    Return every ``entity_type='scenario'`` node owned by ``agent_type`` whose cosine
+    similarity to the query clears ``floor``, sorted by score desc and capped at
+    ``top_k``. Each candidate carries {node_id, label, score, scn_canonical_question,
+    definition, nl_description}. The ``score`` is for logging only — it is never shown to
+    the LLM, and the final pick is delegated to services.scenario_selector. Returns [] if
+    no scenario clears the floor.
+    """
+    if session_id is None:
+        session_id = _session_id_for(project_type or "")
+
+    node_rows, n_mat, _p_rows, _p_mat = _load_indexes(session_id)
+    if not node_rows:
+        return []
+
+    scen_idx = _scenario_index(node_rows, agent_type)
+    if not scen_idx:
+        return []
+
+    q_vec = _embed_query(query)
+    scores = n_mat[scen_idx] @ q_vec
+    ranked = sorted(
+        ((float(scores[k]), scen_idx[k]) for k in range(len(scen_idx))),
+        key=lambda t: -t[0],
+    )
+    picked = [(s, i) for s, i in ranked if s >= floor][:top_k]
+
+    if not picked:
+        if ranked:
+            bs, bi = ranked[0]
+            logger.info(
+                "search_scenario_candidates [agent=%s session=%s]: no candidate >= %.2f "
+                "(best '%s'=%.4f)", agent_type, session_id, floor,
+                node_rows[bi].get("node_id"), bs,
+            )
+        return []
+
+    node_ids = [node_rows[i].get("node_id") for _s, i in picked]
+    texts = _fetch_scenario_texts(node_ids, session_id)
+
+    candidates: list[dict] = []
+    for s, i in picked:
+        nid = node_rows[i].get("node_id")
+        t = texts.get(nid, {})
+        candidates.append({
+            "node_id": nid,
+            "label": node_rows[i].get("label"),
+            "score": round(s, 4),
+            "scn_canonical_question": t.get("scn_canonical_question", ""),
+            "definition": t.get("definition", ""),
+            "nl_description": t.get("nl_description", ""),
+        })
+
+    logger.info(
+        "search_scenario_candidates [agent=%s session=%s]: %d candidate(s) >= %.2f: %s",
+        agent_type, session_id, len(candidates), floor,
+        [(c["node_id"], c["score"]) for c in candidates],
+    )
+    print(
+        f"\n  \033[96mScenario recall: {len(candidates)} candidate(s) >= {floor:.2f} "
+        f"-> LLM selector\033[0m",
+        flush=True,
+    )
+    return candidates

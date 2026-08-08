@@ -48,13 +48,22 @@ _STEP_TIMEOUT_SEC = 300
 # ── Deterministic scenario-node bypass ───────────────────────────────────────
 
 def _fetch_scenario_node_match(query: str, project_type: str, agent_type: str) -> dict | None:
-    """Look up a matching entity_type='scenario' GRAPH node owned by ``agent_type``
-    (embedding search sliced to that agent's scenario nodes, gated on the node's own
-    scn_similarity_threshold). Returns {node_id, label, score, threshold} or None.
-    Non-fatal on any error."""
+    """Two-stage scenario match, over the scenario nodes owned by ``agent_type``:
+      1. Embedding RECALL — every scenario with cosine >= SCENARIO_RECALL_FLOOR.
+      2. LLM RE-RANK — a light LLM (gpt-5-mini, low effort) picks the ONE scenario that
+         truly answers the query from the candidates' canonical question + definition
+         (no scores shown), or 'none' → return None so the planner handles it.
+    Returns the picked candidate {node_id, label, score, ...} or None. Non-fatal on error.
+    """
     try:
-        from services.schema_embedding_service import search_scenarios
-        return search_scenarios(query, project_type=project_type, agent_type=agent_type)
+        from services.schema_embedding_service import search_scenario_candidates
+        from services.scenario_selector import select_scenario
+        candidates = search_scenario_candidates(
+            query, project_type=project_type, agent_type=agent_type
+        )
+        if not candidates:
+            return None
+        return select_scenario(query, candidates)
     except Exception as e:
         logger.warning("Scenario-node match failed (non-fatal): %s", e)
         return None
@@ -229,14 +238,14 @@ def planner_node(state: RCAState) -> dict[str, Any]:
 
     # ── Step 0: Deterministic scenario-node bypass (fast path) ──
     # If an entity_type='scenario' GRAPH node owned by this agent (scn_agent_type ==
-    # state.agent_type) matches >= its own threshold, run it deterministically — no
-    # planner LLM, no traversal LLM. The scenario's orchestrator calls its contributing
-    # nodes with fixed group_by/filters, so grouping/filtering/computation are fully
-    # repeatable (the consistency path).
+    # state.agent_type) is selected — embedding recall, then an LLM re-rank on meaning —
+    # run it deterministically: no planner LLM, no traversal LLM. The scenario's
+    # orchestrator calls its contributing nodes with fixed group_by/filters, so
+    # grouping/filtering/computation are fully repeatable (the consistency path).
     # Match on the RAW user query, not the refined one: a scenario's canonical question
-    # is written in the user's own phrasing, and the refiner's normalization can drift a
-    # verbatim query below the similarity threshold. Param extraction below still uses
-    # refined_query (entity names normalized, which the filters need to be case-correct).
+    # is written in the user's own phrasing, and the refiner's normalization drifts the
+    # embedding away from it. Param extraction below still uses refined_query (entity
+    # names normalized, which the filters need to be case-correct).
     agent_type = state.get("agent_type") or "rca"
     scenario_match_query = state.get("user_query") or refined_query
     scenario_node = _fetch_scenario_node_match(
@@ -245,10 +254,14 @@ def planner_node(state: RCAState) -> dict[str, Any]:
     if scenario_node:
         bypass = _run_scenario_bypass(scenario_node, refined_query, state.get("project_type", ""))
         if bypass is not None:
+            reason = scenario_node.get("selection_reason") or ""
             print(
                 f"  {_GREEN}Deterministic scenario bypass: '{scenario_node.get('label')}' "
-                f"(sim {scenario_node.get('score')}) — skipping LLM planner + traversal{_RESET}"
+                f"(recall {scenario_node.get('score')}, LLM-picked) "
+                f"— skipping LLM planner + traversal{_RESET}"
             )
+            if reason:
+                print(f"  {_DIM}Selector: {reason}{_RESET}")
             return {
                 "planning_rationale": f"Deterministic scenario bypass: {scenario_node.get('label')}",
                 "planner_steps": [f"Scenario: {scenario_node.get('label')}"],
