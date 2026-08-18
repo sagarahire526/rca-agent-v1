@@ -4,13 +4,21 @@ Streamlit chatbot UI for the RCA Agent.
 Run backend first:  uvicorn app.main:app --port 8000 --timeout-keep-alive 300
 Run UI:             streamlit run streamlit_app.py
 """
+import os
 import uuid
 import time
 
 import streamlit as st
 import requests
+from dotenv import load_dotenv
 
-API_BASE = "http://localhost:8001/api/v1"
+load_dotenv()
+
+API_BASE = os.getenv("API_BASE", "http://localhost:8001/api/v1")
+
+# The API requires HTTP Basic credentials on every route; reuse the same
+# API_USERNAME / API_PASSWORD the backend is configured with.
+API_AUTH = (os.getenv("API_USERNAME", ""), os.getenv("API_PASSWORD", ""))
 
 st.set_page_config(
     page_title="RCA Agent",
@@ -42,7 +50,7 @@ def _status_badge(status: str) -> str:
 
 def _fetch_health() -> dict | None:
     try:
-        r = requests.get(f"{API_BASE}/health", timeout=8)
+        r = requests.get(f"{API_BASE}/health", auth=API_AUTH, timeout=8)
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -57,6 +65,7 @@ def _run_analysis(query: str) -> dict:
             "query": query,
             "thread_id": st.session_state.thread_id,
         },
+        auth=API_AUTH,
         timeout=300,
     )
     r.raise_for_status()
@@ -70,6 +79,7 @@ def _resume_analysis(clarification: str) -> dict:
             "thread_id": st.session_state.thread_id,
             "clarification": clarification,
         },
+        auth=API_AUTH,
         timeout=300,
     )
     r.raise_for_status()

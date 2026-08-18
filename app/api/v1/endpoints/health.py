@@ -31,7 +31,25 @@ import config
 import services.bkg_service as bkg_svc
 
 logger = logging.getLogger(__name__)
+
+# Authenticated, detailed health — mounted with an auth dependency in router.py.
 router = APIRouter(tags=["System"])
+
+# Unauthenticated liveness probe for the platform. Deliberately says nothing
+# about backing services: the detailed view leaks hostnames, schema names and
+# driver error text, which is what pentest finding #5 was about.
+public_router = APIRouter(tags=["System"])
+
+
+def _sanitize(exc: Exception) -> str:
+    """
+    Exception text from psycopg2 / neo4j carries hostnames, ports, database
+    names and schema names. Surface it only outside deployed environments;
+    the full detail always goes to the server log.
+    """
+    if config.IS_PRODUCTION:
+        return "unavailable"
+    return str(exc)
 
 
 # ── Individual connectivity checks ─────────────────────────────────────────
@@ -47,15 +65,17 @@ def _check_neo4j() -> dict:
                 "detail": f"{result.get('node_count', '?')} nodes loaded",
                 "latency_ms": latency,
             }
+        error = result.get("error", "unknown error")
+        logger.warning("Neo4j health check reported an error: %s", error)
         return {
             "status": "unavailable",
-            "detail": result.get("error", "unknown error"),
+            "detail": "unavailable" if config.IS_PRODUCTION else error,
             "latency_ms": latency,
         }
     except Exception as e:
         latency = round((time.perf_counter() - t0) * 1000, 1)
         logger.warning("Neo4j health check failed: %s", e)
-        return {"status": "unavailable", "detail": str(e), "latency_ms": latency}
+        return {"status": "unavailable", "detail": _sanitize(e), "latency_ms": latency}
 
 
 def _check_postgres() -> dict:
@@ -79,13 +99,13 @@ def _check_postgres() -> dict:
         latency = round((time.perf_counter() - t0) * 1000, 1)
         return {
             "status": "connected",
-            "detail": f"semantics_simulation has {row_count} scenario(s) indexed",
+            "detail": f"{row_count} scenario(s) indexed",
             "latency_ms": latency,
         }
     except Exception as e:
         latency = round((time.perf_counter() - t0) * 1000, 1)
         logger.warning("PostgreSQL health check failed: %s", e)
-        return {"status": "unavailable", "detail": str(e), "latency_ms": latency}
+        return {"status": "unavailable", "detail": _sanitize(e), "latency_ms": latency}
 
 
 def _check_openai() -> dict:
@@ -110,10 +130,21 @@ def _check_openai() -> dict:
     except Exception as e:
         latency = round((time.perf_counter() - t0) * 1000, 1)
         logger.warning("OpenAI health check failed: %s", e)
-        return {"status": "unavailable", "detail": str(e), "latency_ms": latency}
+        return {"status": "unavailable", "detail": _sanitize(e), "latency_ms": latency}
 
 
-# ── Endpoint ───────────────────────────────────────────────────────────────
+# ── Endpoints ──────────────────────────────────────────────────────────────
+
+@public_router.get("/healthz", summary="Liveness probe (public)")
+def liveness():
+    """
+    Unauthenticated liveness probe for platform health checks.
+
+    Reports only that the process is serving requests. Use `/health` (which
+    requires credentials) for backing-service status.
+    """
+    return {"status": "ok"}
+
 
 @router.get("/health", summary="System health check")
 def health_check():

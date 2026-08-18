@@ -92,9 +92,11 @@ def semantic_retrieve(body: SemanticRetrieveRequest):
     try:
         svc = _get_semantic()
         raw_matches = svc.search_similar_scenarios(body.question, threshold=body.threshold)
-    except Exception as e:
-        logger.error("Semantic retrieval failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Retrieval error: {e}")
+    except Exception:
+        # Logged with the full trace; the client gets the generic body from the
+        # handler in main.py. The raw text carries DB connection details.
+        logger.exception("Semantic retrieval failed")
+        raise
 
     elapsed = round((time.perf_counter() - t0) * 1000, 1)
     logger.info(

@@ -31,9 +31,11 @@ def analyze(req: AnalyzeRequest):
         result = rca_svc.run_query(req.query, project_type=req.project_type.value, thread_id=thread_id, user_id=req.user_id, agent_type=req.agent_type.value)
         return AnalyzeResponse(thread_id=thread_id, **result)
     except ValueError as e:
+        # Application-authored validation messages — safe to return.
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    # Anything else propagates to the handler in main.py, which logs the trace
+    # and returns a generic body. Driver exceptions carry DB hostnames and
+    # schema names and must not reach the client.
 
 
 @router.post("/analyze/resume", response_model=AnalyzeResponse)
@@ -44,5 +46,3 @@ def analyze_resume(req: ResumeRequest):
         return AnalyzeResponse(thread_id=req.thread_id, **result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

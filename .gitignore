@@ -64,3 +64,10 @@ Copy of Nokia Scenario.xlsx
 BKG_NODE_SCHEMA.md
 results.xlsx
 .claude/
+
+# ── Sandbox HTTP endpoint (pentest finding #1: unauthenticated RCE) ──────────
+# Kept locally for reference but untracked, so it is never mounted or shipped
+# again. app/tools/python_sandbox.py stays tracked — the planner and the
+# LangChain tools use it in-process.
+app/api/v1/endpoints/sandbox.py
+app/services/sandbox_service.py

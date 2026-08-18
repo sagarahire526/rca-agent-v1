@@ -36,3 +36,29 @@ SEMANTIC_SEARCH_URL = os.getenv(
     "SEMANTIC_SEARCH_URL",
     "https://pm-copilot-macro-gcl-osdp-gsd-gsd-delivery-staging.aibi-americas-002.dyn.nesc.nokia.net",
 )
+
+# ── API authentication ─────────────────────────────────────────────────────
+# HTTP Basic credentials guarding every /api/v1 route. Deliberately NO
+# defaults: an unconfigured deployment fails closed (see api/deps.py) rather
+# than serving the API unauthenticated.
+API_USERNAME = os.getenv("API_USERNAME")
+API_PASSWORD = os.getenv("API_PASSWORD")
+
+# ── Environment / exposure ─────────────────────────────────────────────────
+# "production" hides the interactive docs and the OpenAPI schema, and stops
+# exception text from reaching clients.
+ENV = os.getenv("ENV", "development").strip().lower()
+IS_PRODUCTION = ENV in ("production", "prod", "staging")
+
+# Browser origins allowed to call the API. Comma-separated; the previous
+# wildcard let any site on the internet issue authenticated cross-origin
+# requests from a logged-in user's browser.
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+
+# Origins permitted to embed the chart preview page in an iframe. Defaults to
+# the same list as ALLOWED_ORIGINS; every other response is framing-denied.
+CHART_FRAME_ANCESTORS = [
+    o.strip() for o in os.getenv("CHART_FRAME_ANCESTORS", "").split(",") if o.strip()
+] or ALLOWED_ORIGINS

@@ -4,10 +4,18 @@ BKG endpoints
   POST /api/v1/bkg/query
 
 Delegates to bkg_service; handles HTTP error mapping only.
+
+NOT MOUNTED: this router is deliberately not included in api/v1/router.py.
+GET /schema returns the full graph-to-table mapping, which is exactly the
+"complete database schema disclosure" the penetration test flagged on the
+sibling service. If it is ever mounted it must carry `require_auth`.
 """
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+
+logger = logging.getLogger(__name__)
 
 import services.bkg_service as bkg_svc
 from api.v1.schemas import BKGQueryRequest
@@ -25,8 +33,9 @@ def get_schema(table_name: Optional[str] = None):
     """
     try:
         return bkg_svc.get_schema(table_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("BKG schema lookup failed")
+        raise
 
 
 @router.post("/bkg/query")
@@ -48,5 +57,6 @@ def bkg_query(req: BKGQueryRequest):
         return bkg_svc.query(req.model_dump(exclude_none=True))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("BKG query failed")
+        raise

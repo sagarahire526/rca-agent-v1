@@ -59,9 +59,9 @@ def create_internal_scenario(body: InternalScenarioCreate):
         return store.create(tag=body.tag, question=body.question, steps=body.steps)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        logger.error("Internal scenario create failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Create error: {e}")
+    except Exception:
+        logger.exception("Internal scenario create failed")
+        raise
 
 
 @router.post(
@@ -79,9 +79,9 @@ def search_internal_scenarios(body: InternalScenarioSearchRequest):
     store = get_internal_scenarios_store()
     try:
         raw_matches = store.search(body.query, threshold=body.threshold)
-    except Exception as e:
-        logger.error("Internal scenario search failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Search error: {e}")
+    except Exception:
+        logger.exception("Internal scenario search failed")
+        raise
 
     elapsed = round((time.perf_counter() - t0) * 1000, 1)
     logger.info(
