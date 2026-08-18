@@ -143,10 +143,11 @@ def _chart_csp() -> str:
     CSP for the chart preview page, which loads Highcharts from its CDN,
     applies inline styles, and runs one inline script block.
 
-    `frame-ancestors` is driven by CHART_FRAME_ANCESTORS so the dashboard can
-    embed the page while every other origin is refused.
+    `frame-ancestors` follows ALLOWED_ORIGINS so the dashboard can embed the
+    page while every other origin is refused. With no origins configured it
+    falls back to 'self' rather than opening up.
     """
-    ancestors = " ".join(config.CHART_FRAME_ANCESTORS) if config.CHART_FRAME_ANCESTORS else "'self'"
+    ancestors = " ".join(config.ALLOWED_ORIGINS) if config.ALLOWED_ORIGINS else "'self'"
     return (
         "default-src 'none'; "
         "script-src 'self' 'unsafe-inline' https://code.highcharts.com; "

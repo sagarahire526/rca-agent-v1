@@ -53,12 +53,8 @@ IS_PRODUCTION = ENV in ("production", "prod", "staging")
 # Browser origins allowed to call the API. Comma-separated; the previous
 # wildcard let any site on the internet issue authenticated cross-origin
 # requests from a logged-in user's browser.
+# These origins are also the ones permitted to embed the chart preview page in
+# an iframe (CSP frame-ancestors); every other response is framing-denied.
 ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
 ]
-
-# Origins permitted to embed the chart preview page in an iframe. Defaults to
-# the same list as ALLOWED_ORIGINS; every other response is framing-denied.
-CHART_FRAME_ANCESTORS = [
-    o.strip() for o in os.getenv("CHART_FRAME_ANCESTORS", "").split(",") if o.strip()
-] or ALLOWED_ORIGINS
