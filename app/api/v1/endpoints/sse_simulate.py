@@ -14,12 +14,11 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import services.db_service as db_svc
-from api.deps import require_auth, require_auth_or_token
 from graph import stream_rca
 from services.sse_manager import sse_manager
 from services.trace_builder import build_traces
@@ -171,9 +170,7 @@ async def _event_generator(
         sse_manager.cleanup(query_id, thread_id)
 
 
-# Browser-loaded via EventSource, which cannot set an Authorization header —
-# this is the one GET that also accepts the credential as ?token=.
-@router.get("/stream", dependencies=[Depends(require_auth_or_token)])
+@router.get("/stream")
 async def stream_analyze(
     query:        str = Query(..., description="The RCA query"),
     user_id:      str = Query(..., description="User identifier"),
@@ -221,8 +218,7 @@ async def stream_analyze(
     )
 
 
-# Issued by the app's HTTP client, not the browser — header only.
-@router.post("/stream/resume", status_code=200, dependencies=[Depends(require_auth)])
+@router.post("/stream/resume", status_code=200)
 def resume_stream(req: StreamResumeRequest):
     """Resume a paused SSE stream after HITL clarification."""
     if not req.thread_id.strip():

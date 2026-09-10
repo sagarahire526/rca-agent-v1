@@ -83,14 +83,13 @@ logging.getLogger("uvicorn.access").addFilter(_RedactTokenFilter())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not config.API_USERNAME or not config.API_PASSWORD:
-        # Loud, but non-fatal: the auth dependency already fails closed, so the
-        # API rejects every request. This makes the misconfiguration obvious in
-        # the startup logs instead of only in 401 responses.
-        logger.error(
-            "API_USERNAME / API_PASSWORD are not set — the API will reject ALL "
-            "requests with 401 until they are configured."
-        )
+    # Auth is currently disabled in api/v1/router.py at the product owner's
+    # request; this is the reminder that the API is open. Remove once the
+    # require_auth dependency is re-enabled.
+    logger.warning(
+        "API authentication is DISABLED — all /api/v1 routes are reachable "
+        "without credentials."
+    )
     if config.IS_PRODUCTION and not config.ALLOWED_ORIGINS:
         logger.warning(
             "ALLOWED_ORIGINS is empty — browser clients will be blocked by CORS."
@@ -119,8 +118,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=config.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=config.ALLOWED_HEADERS,
 )
 
 
@@ -136,6 +135,21 @@ _BASE_SECURITY_HEADERS = {
 
 # JSON API responses never need to load or embed anything.
 _API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
+# Swagger UI and ReDoc load their bundles from jsDelivr and their fonts from
+# Google, so the strict policy above would render them as a blank page. These
+# routes exist only outside production, where they are 404.
+_DOCS_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc"})
+_DOCS_CSP = (
+    "default-src 'none'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com data:; "
+    "img-src 'self' data: https://cdn.jsdelivr.net https://fastapi.tiangolo.com; "
+    "worker-src 'self' blob:; "
+    "connect-src 'self'; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+)
 
 
 def _chart_csp() -> str:
@@ -178,6 +192,8 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        is_docs = scope.get("path", "") in _DOCS_PATHS
+
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
@@ -190,7 +206,12 @@ class SecurityHeadersMiddleware:
 
                 if "Content-Security-Policy" not in headers:
                     is_html = headers.get("content-type", "").startswith("text/html")
-                    headers["Content-Security-Policy"] = _chart_csp() if is_html else _API_CSP
+                    if is_docs:
+                        headers["Content-Security-Policy"] = _DOCS_CSP
+                    elif is_html:
+                        headers["Content-Security-Policy"] = _chart_csp()
+                    else:
+                        headers["Content-Security-Policy"] = _API_CSP
                     if not is_html and "X-Frame-Options" not in headers:
                         headers["X-Frame-Options"] = "DENY"
 

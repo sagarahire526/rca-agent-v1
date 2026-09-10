@@ -58,3 +58,11 @@ IS_PRODUCTION = ENV in ("production", "prod", "staging")
 ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
 ]
+
+# Request headers the allowed origins may send. Defaults to "*" (echo whatever
+# the browser asks for) because the origin allowlist above is the actual
+# control — once an origin is trusted, restricting which headers it may send
+# buys no security, but a missing entry fails the preflight with a 400.
+ALLOWED_HEADERS = [
+    h.strip() for h in os.getenv("ALLOWED_HEADERS", "*").split(",") if h.strip()
+]

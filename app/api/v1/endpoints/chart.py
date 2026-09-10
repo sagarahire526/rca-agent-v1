@@ -15,11 +15,10 @@ import html
 import json
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 
 import services.db_service as db_svc
-from api.deps import require_auth, require_auth_or_token
 
 router = APIRouter(prefix="/chart", tags=["Chart"])
 
@@ -52,7 +51,7 @@ def _render(template: str, values: dict[str, str]) -> str:
     return pattern.sub(lambda m: values[m.group(0)], template)
 
 
-@router.get("/{query_id}", dependencies=[Depends(require_auth)])
+@router.get("/{query_id}")
 def get_chart_data(query_id: str):
     """Return the raw chart JSON stored for this query."""
     row = db_svc.get_charts_by_query_id(query_id)
@@ -64,13 +63,7 @@ def get_chart_data(query_id: str):
     return payload
 
 
-# Opened directly in a browser tab or iframe, neither of which can set an
-# Authorization header — accepts the credential as ?token= as well.
-@router.get(
-    "/{query_id}/view",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_auth_or_token)],
-)
+@router.get("/{query_id}/view", response_class=HTMLResponse)
 def view_chart(query_id: str):
     """Serve a self-contained HTML page that renders the chart with Highcharts."""
     row = db_svc.get_charts_by_query_id(query_id)

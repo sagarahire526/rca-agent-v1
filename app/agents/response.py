@@ -12,8 +12,8 @@ Handles two upstream paths:
 from __future__ import annotations
 
 import json
-import threading
 import time
+import threading
 import logging
 from typing import Any
 
@@ -75,6 +75,26 @@ _BOLD = "\033[1m"
 _RESET = "\033[0m"
 
 
+def _render_tool_output(output: Any) -> str:
+    """
+    Serialize a tool output for the analysis/chart LLMs — in full, no char cap.
+
+    Deliberately uncapped: the analysis agent runs on a large-context model, and
+    the previous 8000-char slice silently dropped whatever serialized last —
+    typically the aggregate rollups (delay-reason summaries, totals), the
+    highest-value part of the payload, because long per-entity lists serialize
+    first and consume the whole budget. The tool layer still caps its own output
+    (run_sql_python at 30k); the scenario-bypass path is uncapped by design.
+
+    Emitted as real JSON rather than `str(dict)` so the payload inside the
+    ```json fence is valid JSON and not Python repr.
+    """
+    try:
+        return json.dumps(output, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(output)
+
+
 def _format_traversal_data(state: RCAState) -> str:
     """
     Format traversal findings into a context string for the analysis agent.
@@ -115,11 +135,7 @@ def _format_traversal_data(state: RCAState) -> str:
                 lines.append(f"\n**Raw Data from Step {idx}** ({len(successful_data)} successful calls):")
                 for sd in successful_data:
                     lines.append(f"\n`{sd['tool']}` result:")
-                    output = sd["output"]
-                    # Truncate very large outputs but keep enough for analysis
-                    if len(str(output)) > 8000:
-                        output = str(output)[:8000] + "\n... (truncated)"
-                    lines.append(f"```json\n{output}\n```")
+                    lines.append(f"```json\n{_render_tool_output(sd['output'])}\n```")
 
             lines.append("")
 
@@ -146,13 +162,9 @@ def _format_traversal_data(state: RCAState) -> str:
             lines.append(f"\n**Raw Data** ({len(successful_data)} successful calls):")
             for sd in successful_data:
                 lines.append(f"\n`{sd['tool']}` result:")
-                output = sd["output"]
-                if len(str(output)) > 8000:
-                    output = str(output)[:8000] + "\n... (truncated)"
-                lines.append(f"```json\n{output}\n```")
+                lines.append(f"```json\n{_render_tool_output(sd['output'])}\n```")
 
     return "\n".join(lines)
-
 
 def _generate_algorithm(llm, user_query: str, data_context: str) -> str:
     """
@@ -173,7 +185,6 @@ def _generate_algorithm(llm, user_query: str, data_context: str) -> str:
     except Exception as exc:
         logger.warning("Algorithm generation failed: %s", exc)
         return ""
-
 
 def _generate_charts(llm, user_query: str, data_context: str) -> dict[str, Any]:
     """
@@ -218,7 +229,6 @@ def _generate_charts(llm, user_query: str, data_context: str) -> dict[str, Any]:
         logger.warning("Chart generation failed: %s", exc)
         return empty
 
-
 def _print_divider(char: str = "-", width: int = 70):
     print(f"{_DIM}{char * width}{_RESET}")
 
@@ -234,10 +244,11 @@ def response_node(state: RCAState) -> dict[str, Any]:
     Reads: refined_query (or user_query), traversal/planner data, errors
     Writes: final_response, calculations, data_summary, current_phase, messages
     """
-    provider = LLMProvider(model="gpt-5-mini", temperature=0.1, reasoning_effort="medium")
+    provider = LLMProvider(model="gpt-5", reasoning_effort='low')
     llm = provider.get_llm()
 
     user_query = state.get("refined_query") or state["user_query"]
+
     data_context = _format_traversal_data(state)
     errors = state.get("errors", [])
 
@@ -246,7 +257,7 @@ def response_node(state: RCAState) -> dict[str, Any]:
     algorithm_result: dict[str, str] = {"value": ""}
 
     def _algorithm_worker() -> None:
-        fast_llm = LLMProvider(model="gpt-5.4-mini", temperature=0.1).get_llm()
+        fast_llm = LLMProvider(model="gpt-5.4-mini").get_llm()
         algorithm_result["value"] = _generate_algorithm(
             fast_llm, user_query, data_context,
         )
@@ -262,9 +273,7 @@ def response_node(state: RCAState) -> dict[str, Any]:
 
     def _chart_worker() -> None:
         try:
-            fast_llm = LLMProvider(
-                model="gpt-5.4-mini", temperature=0.1, reasoning_effort="low",
-            ).get_llm()
+            fast_llm = LLMProvider(model="gpt-5-mini").get_llm()
             chart_result["value"] = _generate_charts(
                 fast_llm, user_query, data_context,
             )
@@ -287,6 +296,7 @@ def response_node(state: RCAState) -> dict[str, Any]:
         )
 
     rca_guidance = state.get("rca_scenario_guidance", "").strip()
+    # print(f"RCA GUIDANCE IS AS FOLLOWS: {rca_guidance}")
     if rca_guidance:
         user_message_parts.append(f"\n{rca_guidance}")
 
@@ -315,7 +325,6 @@ def response_node(state: RCAState) -> dict[str, Any]:
         "never plain-English-only suggestions. If you cannot derive a numeric "
         "projection for an action from the data, drop that recommendation."
     )
-
     human_message = "\n".join(user_message_parts)
 
     # ── Direct LLM call (no tools) ──
@@ -366,11 +375,9 @@ def response_node(state: RCAState) -> dict[str, Any]:
         print(f"\n  {_RED}Analysis failed after {elapsed:.1f}s: {e}{_RESET}\n")
         logger.error("Analysis agent failed: %s", e)
         algorithm_thread.join(timeout=5)
-        chart_thread.join(timeout=5)
         return {
             "final_response": f"Analysis failed: {e}",
             "execution_algorithm": algorithm_result["value"],
-            "generated_charts": chart_result["value"],
             "calculations": "",
             "data_summary": {},
             "current_phase": "complete",
