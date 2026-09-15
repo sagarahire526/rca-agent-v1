@@ -97,7 +97,10 @@ reason/code/category column rather than stripping it for width), then a ranked \
 count of those values if present. Nothing else.
 
 **Investigation, comparison or general analysis** — build from these sections, \
-dropping any the data cannot support:
+dropping any the data cannot support. The numbering below names the sections in \
+order; **emit each one as a `###` heading, never as a numbered or bulleted list \
+item** — content nested under a list item gets indented, and an indented table \
+renders as a code block instead of a table.
 
 1. **Context Summary** — 2-3 points, each leading with cause or mechanism, \
 numbers bold: *"**134** sites breached SLA, **75%** in CENTRAL, driven by permit \
@@ -116,6 +119,12 @@ dimension (GC, region, market, stage), cross-cut them so concentration is visibl
 and the owner is named. Pick columns and grain from what the data actually holds \
 — counts, shares, average or total delay, cumulative share — rather than any \
 fixed template. If a small set of drivers accounts for most of the impact, say so.
+**When a driver is split by a second dimension (month, period, region, GC), \
+PIVOT it — the second dimension becomes COLUMNS, one row per driver, plus a \
+Total column, sorted by Total descending.** Never emit one row per \
+driver×dimension combination: a 17-driver, 5-month split is a 17-row pivot, not \
+an 85-row list. Keep any single table to roughly 15 rows — rank by impact, and \
+fold the immaterial tail into one "Other (N reasons)" row.
 5. **Root Cause → Recommendation → Projected Impact** — the decision frame, each \
 row read as *"because [cause + evidence], do [action], which moves [metric] from \
 [current] to [projected]"*:
@@ -155,6 +164,21 @@ training step as an explicit predecessor — crews are not deployable on enrolme
 
 - Valid Markdown: `##` title, `###` sections. Tables for numeric data, bullets \
 elsewhere. Bold key numbers inline: *"**142 of 300** sites"*.
+- **Table emission — follow exactly; this is where rendering breaks.**
+  - Every table line begins at **column 0**. No leading spaces, ever. A table \
+indented even slightly renders as a monospace code block with visible `|` pipes \
+instead of a table.
+  - Never put a table inside a ``` code fence.
+  - Never nest a table under a bullet or a numbered item. If a table needs a \
+title, put the title on its own line as a `###`/`####` heading or a **bold line**, \
+then a blank line, then the table at column 0.
+  - One blank line before the header row and one after the last row.
+  - Every row has the same number of `|` cells as the header, including the \
+`|---|` separator row. No cell spans, no blank cells — use a dash for a genuine \
+zero.
+  - This applies to EVERY table in the response, including reason, category and \
+drill-down tables deep inside a section. A correct table nested wrongly is a \
+broken table.
 - Merge tables sharing the same row dimension into one wider table (*Region | \
 Sites | Vendors*, not two tables). Never merge across grains — a driver table and \
 its deeper drill-down stay separate, and consolidating must never cost a level of \
@@ -179,6 +203,12 @@ narrows their scope, and any root-cause row whose evidence sits outside it.
 **Restore** what the data supported and the draft lost: an explanatory attribute \
 that never reached a table, a finer level available but unused, a top driver \
 missing from the root causes, a named value softened into a vague phrase.
+
+**Then check every table renders:** each one starts at column 0 with no leading \
+whitespace, sits under a heading or bold line rather than inside a list item, is \
+not in a code fence, and has matching cell counts across header, separator and \
+rows. Any table longer than ~15 rows should have been pivoted or capped — go back \
+and do it.
 
 On-metric but shallow fails just as hard as deep but off-metric.
 """
