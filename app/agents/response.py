@@ -11,6 +11,7 @@ Handles two upstream paths:
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import time
 import threading
@@ -21,6 +22,12 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from models.state import RCAState
 from services.llm_provider import LLMProvider
+from services.langfuse_observability import (
+    handler_for,
+    RESPONSE_AGENT,
+    ALGORITHM_NARRATOR,
+    CHART_GENERATOR,
+)
 from prompts.response_prompt import RESPONSE_SYSTEM
 from prompts.algorithm_prompt import ALGORITHM_SYSTEM
 from prompts.chart_prompt import CHART_SYSTEM
@@ -173,14 +180,17 @@ def _generate_algorithm(llm, user_query: str, data_context: str) -> str:
     LLM. Returns "" on any failure — never blocks the main response.
     """
     try:
-        resp = llm.invoke([
-            SystemMessage(content=ALGORITHM_SYSTEM),
-            HumanMessage(content=(
-                f"## User Query\n{user_query}\n\n"
-                f"## Tool Trace\n{data_context}\n\n"
-                "Write the numbered algorithm now."
-            )),
-        ])
+        resp = llm.invoke(
+            [
+                SystemMessage(content=ALGORITHM_SYSTEM),
+                HumanMessage(content=(
+                    f"## User Query\n{user_query}\n\n"
+                    f"## Tool Trace\n{data_context}\n\n"
+                    "Write the numbered algorithm now."
+                )),
+            ],
+            config=handler_for(ALGORITHM_NARRATOR),
+        )
         return (resp.content or "").strip()
     except Exception as exc:
         logger.warning("Algorithm generation failed: %s", exc)
@@ -197,14 +207,17 @@ def _generate_charts(llm, user_query: str, data_context: str) -> dict[str, Any]:
     empty: dict[str, Any] = {"charts": [], "rationale": ""}
     raw = ""
     try:
-        resp = llm.invoke([
-            SystemMessage(content=CHART_SYSTEM),
-            HumanMessage(content=(
-                f"## User Query\n{user_query}\n\n"
-                f"## Traversal Data\n{data_context}\n\n"
-                "Generate Highcharts specs now. Return ONLY JSON."
-            )),
-        ])
+        resp = llm.invoke(
+            [
+                SystemMessage(content=CHART_SYSTEM),
+                HumanMessage(content=(
+                    f"## User Query\n{user_query}\n\n"
+                    f"## Traversal Data\n{data_context}\n\n"
+                    "Generate Highcharts specs now. Return ONLY JSON."
+                )),
+            ],
+            config=handler_for(CHART_GENERATOR),
+        )
         raw = (resp.content or "").strip()
         if raw.startswith("```"):
             # Strip an accidental ```json ... ``` fence if the model emits one
@@ -262,7 +275,11 @@ def response_node(state: RCAState) -> dict[str, Any]:
             fast_llm, user_query, data_context,
         )
 
-    algorithm_thread = threading.Thread(target=_algorithm_worker, daemon=True)
+    # Raw threads start with an empty context; run each worker inside a copy of
+    # this one so handler_for() still sees the request's Langfuse context.
+    algorithm_thread = threading.Thread(
+        target=contextvars.copy_context().run, args=(_algorithm_worker,), daemon=True,
+    )
     algorithm_thread.start()
 
     # Start Highcharts spec generation in parallel as well — same fast tier,
@@ -280,7 +297,9 @@ def response_node(state: RCAState) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("Chart worker setup failed: %s", exc)
 
-    chart_thread = threading.Thread(target=_chart_worker, daemon=True)
+    chart_thread = threading.Thread(
+        target=contextvars.copy_context().run, args=(_chart_worker,), daemon=True,
+    )
     chart_thread.start()
 
     # Build the human message with all context
@@ -337,10 +356,13 @@ def response_node(state: RCAState) -> dict[str, Any]:
     final_response = ""
 
     try:
-        response_msg = llm.invoke([
-            SystemMessage(content=RESPONSE_SYSTEM),
-            HumanMessage(content=human_message),
-        ])
+        response_msg = llm.invoke(
+            [
+                SystemMessage(content=RESPONSE_SYSTEM),
+                HumanMessage(content=human_message),
+            ],
+            config=handler_for(RESPONSE_AGENT),
+        )
         final_response = response_msg.content or ""
 
         elapsed = time.perf_counter() - start_time

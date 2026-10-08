@@ -23,6 +23,7 @@ from graph import stream_rca
 from services.sse_manager import sse_manager
 from services.trace_builder import build_traces
 from services.json_safe import safe_dumps
+from services.langfuse_observability import set_request_context
 from api.v1.schemas import AgentType, ProjectType
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,11 @@ def _run_stream_thread(
     agent_type: str,
 ) -> None:
     t0 = time.perf_counter()
+
+    # Bound inside the executor thread (run_in_executor does not carry the
+    # caller's context). The HITL resume continues on this same thread, so the
+    # resumed half of the run is traced under the same context too.
+    set_request_context(thread_id, user_id, query_id, agent_type)
 
     db_svc.upsert_thread(thread_id, user_id, agent_type=agent_type)
     db_svc.auto_name_thread(thread_id, query)

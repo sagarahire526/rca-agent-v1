@@ -18,6 +18,7 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from services.llm_provider import LLMProvider
+from services.langfuse_observability import handler_for, SCENARIO_SELECTOR
 from prompts.scenario_select_prompt import (
     SCENARIO_SELECT_SYSTEM,
     build_scenario_select_user,
@@ -69,10 +70,13 @@ def select_scenario(query: str, candidates: list[dict]) -> dict | None:
     shown = sorted(candidates, key=lambda c: str(c["node_id"]))
     try:
         llm = LLMProvider(model="gpt-5-mini", temperature=0.0, reasoning_effort="low").get_llm()
-        resp = llm.invoke([
-            SystemMessage(content=SCENARIO_SELECT_SYSTEM),
-            HumanMessage(content=build_scenario_select_user(query, shown)),
-        ])
+        resp = llm.invoke(
+            [
+                SystemMessage(content=SCENARIO_SELECT_SYSTEM),
+                HumanMessage(content=build_scenario_select_user(query, shown)),
+            ],
+            config=handler_for(SCENARIO_SELECTOR),
+        )
         choice, reason = _parse_choice(resp.content)
     except Exception as e:  # noqa: BLE001
         logger.warning("Scenario LLM selection failed (falling back to planner): %s", e)

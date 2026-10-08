@@ -28,6 +28,7 @@ from langgraph.types import interrupt
 
 from models.state import RCAState
 from services.llm_provider import LLMProvider
+from services.langfuse_observability import handler_for, QUERY_REFINER
 from services.entity_lookup_service import get_all_entity_lookups
 from prompts.query_refiner_prompt import QUERY_REFINER_SYSTEM
 
@@ -99,10 +100,13 @@ def query_refiner_node(state: RCAState) -> dict[str, Any]:
         "{{region_names}}", ", ".join(lookups["regions"]) or "(not available)"
     )
 
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_query),
-    ])
+    response = llm.invoke(
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_query),
+        ],
+        config=handler_for(QUERY_REFINER),
+    )
 
     raw_content = response.content
     logger.info("Query refiner raw LLM response: %s", raw_content[:500])
@@ -170,10 +174,13 @@ def query_refiner_node(state: RCAState) -> dict[str, Any]:
             print(f"  {_GREEN}OK Clarification received — re-invoking LLM to resolve entities.{_RESET}", flush=True)
             combined_query = f"{user_query} — Additional context: {clar_text}"
 
-        resume_response = llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=combined_query),
-        ])
+        resume_response = llm.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=combined_query),
+            ],
+            config=handler_for(QUERY_REFINER),
+        )
         resume_parsed = _parse_refiner_response(resume_response.content)
         refined_query = resume_parsed.get("refined_query", combined_query) or combined_query
 

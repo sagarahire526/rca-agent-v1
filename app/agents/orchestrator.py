@@ -20,6 +20,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from models.state import RCAState
 from services.llm_provider import LLMProvider
+from services.langfuse_observability import handler_for, ORCHESTRATOR
 from prompts.orchestrator_prompt import ORCHESTRATOR_SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -73,10 +74,13 @@ def orchestrator_node(state: RCAState) -> dict[str, Any]:
     provider = LLMProvider(model="gpt-4o-mini")
     llm = provider.get_llm()
 
-    response = llm.invoke([
-        SystemMessage(content=ORCHESTRATOR_SYSTEM),
-        HumanMessage(content=refined_query),
-    ])
+    response = llm.invoke(
+        [
+            SystemMessage(content=ORCHESTRATOR_SYSTEM),
+            HumanMessage(content=refined_query),
+        ],
+        config=handler_for(ORCHESTRATOR),
+    )
 
     parsed = _parse_orchestrator_response(response.content)
     routing_decision: str = parsed.get("routing_decision", "rca")

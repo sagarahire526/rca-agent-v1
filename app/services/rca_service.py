@@ -14,6 +14,7 @@ import uuid
 
 from graph import run_rca, resume_rca, get_pending_interrupt
 import services.db_service as db_svc
+from services.langfuse_observability import set_request_context
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ def run_query(
 
     query_id = str(uuid.uuid4())
     t0 = time.perf_counter()
+
+    set_request_context(thread_id, user_id, query_id, agent_type)
 
     db_svc.upsert_thread(thread_id, user_id, agent_type=agent_type)
     db_svc.create_query(query_id, thread_id, user_id, query)
@@ -112,6 +115,11 @@ def resume_query(clarification: str, thread_id: str) -> dict:
         db_svc.update_hitl_answered(query_id, clarification, was_skipped)
 
     db_svc.touch_thread(thread_id)
+
+    # The resume request carries only thread_id; user and agent come from the
+    # thread row so the resumed turn lands under the same Langfuse user + flow.
+    thread = db_svc.get_thread(thread_id) or {}
+    set_request_context(thread_id, thread.get("user_id"), query_id, thread.get("agent_type"))
 
     logger.info("Resuming RCA query [thread=%s]", thread_id)
 

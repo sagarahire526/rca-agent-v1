@@ -26,6 +26,8 @@ import json
 import logging
 from datetime import date, timedelta
 
+from services.langfuse_observability import handler_for, SCENARIO_PARAMS
+
 logger = logging.getLogger(__name__)
 
 _ALLOWED_GROUP_BY = ["construction_gc", "m_market", "rgn_region", "m_area", "por_category", "smp_name", "pj_project_id"]
@@ -189,10 +191,13 @@ def extract_params_by_schema(
                 for f in fields
             ]
         }
-        resp = _param_llm().invoke([
-            SystemMessage(content=SCENARIO_PARAM_SCHEMA_SYSTEM),
-            HumanMessage(content=json.dumps({"schema": schema_for_llm, "question": query or ""})),
-        ])
+        resp = _param_llm().invoke(
+            [
+                SystemMessage(content=SCENARIO_PARAM_SCHEMA_SYSTEM),
+                HumanMessage(content=json.dumps({"schema": schema_for_llm, "question": query or ""})),
+            ],
+            config=handler_for(SCENARIO_PARAMS),
+        )
         data = _parse_json(resp.content)
         for f in fields:
             if f.get("name"):
@@ -239,10 +244,13 @@ def extract_scenario_params(
         from langchain_core.messages import SystemMessage, HumanMessage
         from prompts.scenario_param_prompt import SCENARIO_PARAM_SYSTEM
 
-        resp = _param_llm().invoke([
-            SystemMessage(content=SCENARIO_PARAM_SYSTEM),
-            HumanMessage(content=query or ""),
-        ])
+        resp = _param_llm().invoke(
+            [
+                SystemMessage(content=SCENARIO_PARAM_SYSTEM),
+                HumanMessage(content=query or ""),
+            ],
+            config=handler_for(SCENARIO_PARAMS),
+        )
         data = _parse_json(resp.content)
 
         dv, du = data.get("duration_value"), (data.get("duration_unit") or "")

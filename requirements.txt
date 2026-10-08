@@ -3,6 +3,10 @@ langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-openai>=0.2.0
 
+# Observability (optional — tracing is a no-op without LANGFUSE_* env vars)
+langfuse>=4.0.0
+langchain>=1.0.0  # required by langfuse.langchain.CallbackHandler
+
 # Neo4j
 neo4j>=5.0.0
 

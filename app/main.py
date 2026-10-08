@@ -41,6 +41,7 @@ from starlette.datastructures import MutableHeaders
 import config
 from api.v1.router import router as v1_router
 import services.db_service as db_svc
+import services.langfuse_observability as langfuse_obs
 
 # ── Logging setup ──
 logging.basicConfig(
@@ -97,6 +98,7 @@ async def lifespan(app: FastAPI):
     db_svc.init_pool()
     db_svc.ensure_tables()
     yield
+    langfuse_obs.flush()
     db_svc.close_pool()
 
 

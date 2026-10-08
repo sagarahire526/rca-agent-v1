@@ -20,6 +20,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from models.state import RCAState
 from services.llm_provider import LLMProvider
+from services.langfuse_observability import handler_for, PLANNER
 from agents.traversal import atraversal_node
 from services.semantic_service import get_semantic_service
 from services.internal_scenarios import get_internal_scenarios_store
@@ -411,10 +412,13 @@ def planner_node(state: RCAState) -> dict[str, Any]:
         today_date=_date.today().isoformat(),
     )
 
-    llm_response = llm.invoke([
-        SystemMessage(content=planning_prompt),
-        HumanMessage(content=refined_query),
-    ])
+    llm_response = llm.invoke(
+        [
+            SystemMessage(content=planning_prompt),
+            HumanMessage(content=refined_query),
+        ],
+        config=handler_for(PLANNER),
+    )
 
     rationale, steps = _parse_planner_response(llm_response.content)
 
